@@ -287,8 +287,7 @@ struct HistoryContentView: View {
         let query = debouncedSearchText.trimmingCharacters(in: .whitespaces)
         if !query.isEmpty && !query.hasPrefix("#") {
             base = base.filter { item in
-                guard item.type == .text else { return false }
-                return item.textContent?.localizedCaseInsensitiveContains(query) ?? false
+                ClipboardItem.matches(item: item, query: query)
             }
         }
         return base.sorted { $0.isPinned && !$1.isPinned }

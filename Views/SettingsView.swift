@@ -203,6 +203,19 @@ struct SettingsView: View {
                         }
                         .toggleStyle(.switch)
                 }
+
+                HStack {
+                    Text("Automatically extract text from images (OCR)")
+                        .font(.system(size: 13, weight: .medium))
+                    Spacer()
+                    Toggle("", isOn: $settings.autoOCR)
+                        .labelsHidden()
+                        .onChange(of: settings.autoOCR) { _ in
+                            settings.save()
+                        }
+                        .toggleStyle(.switch)
+                }
+                .help("Uses on-device text recognition so screenshots and copied images become searchable automatically.")
                 
                 // History Size Section
                 Divider()
@@ -409,6 +422,7 @@ class SettingsViewModel: ObservableObject {
     @Published var minTextLength: Int
     @Published var deduplicateHistory: Bool
     @Published var customHistoryLimit: Int
+    @Published var autoOCR: Bool
     
     private let defaults = UserDefaults.standard
     private let hotkeyModifiersKey = "hotkeyModifiers"
@@ -442,6 +456,7 @@ class SettingsViewModel: ObservableObject {
         self.minTextLength = SettingsManager.shared.minTextLength
         self.deduplicateHistory = SettingsManager.shared.deduplicateHistory
         self.customHistoryLimit = SettingsManager.shared.customHistoryLimit
+        self.autoOCR = SettingsManager.shared.autoOCR
     }
     
     func save() {
@@ -460,6 +475,7 @@ class SettingsViewModel: ObservableObject {
         SettingsManager.shared.minTextLength = minTextLength
         SettingsManager.shared.deduplicateHistory = deduplicateHistory
         SettingsManager.shared.customHistoryLimit = customHistoryLimit
+        SettingsManager.shared.autoOCR = autoOCR
         SettingsManager.shared.save()
 
         NotificationCenter.default.post(name: .bufferHotkeyChanged, object: nil)

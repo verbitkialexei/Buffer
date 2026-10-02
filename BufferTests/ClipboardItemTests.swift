@@ -307,6 +307,20 @@ class ClipboardItemTests: XCTestCase {
         XCTAssertFalse(HistoryLimit.custom.isReduction(from: .custom), "custom->custom: targetMax < currentMax is false for equal caps")
     }
 
+    func testSearchMatchesTextAndOCRButNotEmptySentinel() {
+        let textItem = ClipboardItem.text("hello world")
+        XCTAssertTrue(ClipboardItem.matches(item: textItem, query: "world"), "text item should match by textContent")
+
+        let imageWithOCR = ClipboardItem(type: .image, imageFilename: "img1.png", ocrText: "scanned receipt total")
+        XCTAssertTrue(ClipboardItem.matches(item: imageWithOCR, query: "receipt"), "image item should match by non-empty ocrText")
+
+        let imageWithEmptySentinel = ClipboardItem(type: .image, imageFilename: "img2.png", ocrText: "")
+        XCTAssertFalse(ClipboardItem.matches(item: imageWithEmptySentinel, query: "receipt"), "empty ocrText sentinel must never match a non-empty query")
+
+        let imageWithNilOCR = ClipboardItem(type: .image, imageFilename: "img3.png", ocrText: nil)
+        XCTAssertFalse(ClipboardItem.matches(item: imageWithNilOCR, query: "receipt"), "nil ocrText must never match")
+    }
+
     func testZoomableImageViewConstantsAndPresets() {
         XCTAssertEqual(ZoomableImageView.minScale, 1.0)
         XCTAssertEqual(ZoomableImageView.maxScale, 4.0)

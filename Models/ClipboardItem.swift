@@ -153,6 +153,19 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         }
     }
     
+    /// Whether an item matches a search query, by text content or extracted OCR text.
+    /// An empty ocrText (the auto-OCR no-text sentinel) deliberately never matches any
+    /// non-empty query, so it cannot pollute search results.
+    static func matches(item: ClipboardItem, query: String) -> Bool {
+        if let textContent = item.textContent, textContent.localizedCaseInsensitiveContains(query) {
+            return true
+        }
+        if let ocrText = item.ocrText, !ocrText.isEmpty, ocrText.localizedCaseInsensitiveContains(query) {
+            return true
+        }
+        return false
+    }
+
     /// Content hash for duplicate detection
     var contentHash: Int {
         switch type {
