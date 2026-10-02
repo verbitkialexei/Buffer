@@ -242,7 +242,7 @@ class ClipboardItemTests: XCTestCase {
     }
 
     func testHistoryLimitTiersAndReduction() {
-        XCTAssertEqual(HistoryLimit.allCases.count, 3)
+        XCTAssertEqual(HistoryLimit.allCases.count, 4)
         XCTAssertEqual(HistoryLimit.essential.maxCount, 200)
         XCTAssertEqual(HistoryLimit.deep.maxCount, 1000)
         XCTAssertNil(HistoryLimit.unlimited.maxCount)
@@ -262,6 +262,49 @@ class ClipboardItemTests: XCTestCase {
         XCTAssertFalse(HistoryLimit.unlimited.isReduction(from: .deep))
         XCTAssertFalse(HistoryLimit.essential.isReduction(from: .essential))
         XCTAssertFalse(HistoryLimit.unlimited.isReduction(from: .unlimited))
+    }
+
+    func testCustomHistoryLimitTier() {
+        let originalCustomLimit = HistoryLimit.customHistoryLimit
+        defer { HistoryLimit.customHistoryLimit = originalCustomLimit }
+
+        HistoryLimit.customHistoryLimit = 5000
+
+        XCTAssertEqual(HistoryLimit.custom.maxCount, 5000)
+        XCTAssertEqual(HistoryLimit.custom.label, "Custom")
+        // Grouping separator is locale-dependent (e.g. "5,000" vs "5.000"), so compare
+        // against the live formatted value rather than hardcoding a separator.
+        XCTAssertEqual(HistoryLimit.custom.subtitle, "\(5000.formatted()) items")
+    }
+
+    func testHistoryLimitIsReductionAllPairwiseCombinations() {
+        let originalCustomLimit = HistoryLimit.customHistoryLimit
+        defer { HistoryLimit.customHistoryLimit = originalCustomLimit }
+        HistoryLimit.customHistoryLimit = 20_000
+
+        // essential (200) vs itself and others
+        XCTAssertFalse(HistoryLimit.essential.isReduction(from: .essential), "essential->essential: equal caps, not a reduction")
+        XCTAssertTrue(HistoryLimit.essential.isReduction(from: .deep), "essential->deep: 200 < 1000, reduction")
+        XCTAssertTrue(HistoryLimit.essential.isReduction(from: .unlimited), "essential->unlimited: finite from nil, reduction")
+        XCTAssertTrue(HistoryLimit.essential.isReduction(from: .custom), "essential->custom: 200 < 20000, reduction")
+
+        // deep (1000) vs others
+        XCTAssertFalse(HistoryLimit.deep.isReduction(from: .essential), "deep->essential: 1000 is not < 200, not a reduction")
+        XCTAssertFalse(HistoryLimit.deep.isReduction(from: .deep), "deep->deep: equal caps, not a reduction")
+        XCTAssertTrue(HistoryLimit.deep.isReduction(from: .unlimited), "deep->unlimited: finite from nil, reduction")
+        XCTAssertTrue(HistoryLimit.deep.isReduction(from: .custom), "deep->custom: 1000 < 20000, reduction")
+
+        // unlimited (nil) vs others
+        XCTAssertFalse(HistoryLimit.unlimited.isReduction(from: .essential), "unlimited->essential: target has no max, not a reduction")
+        XCTAssertFalse(HistoryLimit.unlimited.isReduction(from: .deep), "unlimited->deep: target has no max, not a reduction")
+        XCTAssertFalse(HistoryLimit.unlimited.isReduction(from: .unlimited), "unlimited->unlimited: target has no max, not a reduction")
+        XCTAssertFalse(HistoryLimit.unlimited.isReduction(from: .custom), "unlimited->custom: second guard returns false because target has no max")
+
+        // custom (20000) vs others
+        XCTAssertFalse(HistoryLimit.custom.isReduction(from: .essential), "custom->essential: 20000 is not < 200, not a reduction")
+        XCTAssertFalse(HistoryLimit.custom.isReduction(from: .deep), "custom->deep: 20000 is not < 1000, not a reduction")
+        XCTAssertTrue(HistoryLimit.custom.isReduction(from: .unlimited), "custom->unlimited: first guard returns self != .unlimited, which is true")
+        XCTAssertFalse(HistoryLimit.custom.isReduction(from: .custom), "custom->custom: targetMax < currentMax is false for equal caps")
     }
 
     func testZoomableImageViewConstantsAndPresets() {

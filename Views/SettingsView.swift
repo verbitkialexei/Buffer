@@ -213,50 +213,29 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
                 
                 HStack(spacing: 12) {
-                    ForEach(HistoryLimit.allCases, id: \.self) { tier in
-                        Button(action: { 
-                            if tier.isReduction(from: settings.historyLimit) {
-                                pendingTier = tier
-                                showingTrimAlert = true
-                            } else {
-                                settings.historyLimit = tier
+                    ForEach(HistoryLimit.allCases.filter { $0 != .custom }, id: \.self) { tier in
+                        historyLimitTile(for: tier)
+                    }
+                }
+
+                historyLimitTile(for: .custom)
+
+                if settings.historyLimit == .custom {
+                    HStack {
+                        Text("Custom item count")
+                            .font(.system(size: 13, weight: .medium))
+                        Spacer()
+                        TextField("", value: $settings.customHistoryLimit, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 90)
+                            .multilineTextAlignment(.trailing)
+                            .onChange(of: settings.customHistoryLimit) { newValue in
+                                let clamped = max(1, newValue)
+                                if clamped != newValue {
+                                    settings.customHistoryLimit = clamped
+                                }
                                 settings.save()
                             }
-                        }) {
-                            VStack(alignment: .center, spacing: 6) {
-                                if settings.historyLimit == tier {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundColor(.accentColor)
-                                        .font(.system(size: 14))
-                                } else {
-                                    Image(systemName: "circle")
-                                        .foregroundColor(.secondary.opacity(0.3))
-                                        .font(.system(size: 14))
-                                }
-                                
-                                Text(tier.label)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundColor(settings.historyLimit == tier ? .primary : .secondary)
-                                
-                                Text(tier.subtitle)
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary.opacity(0.8))
-                            }
-                            .padding(.vertical, 14)
-                            .frame(maxWidth: .infinity)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(settings.historyLimit == tier 
-                                          ? Color.accentColor.opacity(0.1) 
-                                          : Color(NSColor.controlBackgroundColor))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(settings.historyLimit == tier 
-                                            ? Color.accentColor : Color.clear, lineWidth: settings.historyLimit == tier ? 1.5 : 1)
-                            )
-                        }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -291,6 +270,52 @@ struct SettingsView: View {
         }
     }
     
+    private func historyLimitTile(for tier: HistoryLimit) -> some View {
+        Button(action: {
+            if tier.isReduction(from: settings.historyLimit) {
+                pendingTier = tier
+                showingTrimAlert = true
+            } else {
+                settings.historyLimit = tier
+                settings.save()
+            }
+        }) {
+            VStack(alignment: .center, spacing: 6) {
+                if settings.historyLimit == tier {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.accentColor)
+                        .font(.system(size: 14))
+                } else {
+                    Image(systemName: "circle")
+                        .foregroundColor(.secondary.opacity(0.3))
+                        .font(.system(size: 14))
+                }
+
+                Text(tier.label)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(settings.historyLimit == tier ? .primary : .secondary)
+
+                Text(tier.subtitle)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary.opacity(0.8))
+            }
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(settings.historyLimit == tier
+                          ? Color.accentColor.opacity(0.1)
+                          : Color(NSColor.controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(settings.historyLimit == tier
+                            ? Color.accentColor : Color.clear, lineWidth: settings.historyLimit == tier ? 1.5 : 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
     private func presetButton(label: String, mods: HotkeyModifiers, keyCode: UInt16) -> some View {
         Button(action: {
             settings.hotkeyModifiers = mods
@@ -383,6 +408,7 @@ class SettingsViewModel: ObservableObject {
     @Published var hideStatusBar: Bool
     @Published var minTextLength: Int
     @Published var deduplicateHistory: Bool
+    @Published var customHistoryLimit: Int
     
     private let defaults = UserDefaults.standard
     private let hotkeyModifiersKey = "hotkeyModifiers"
@@ -415,6 +441,7 @@ class SettingsViewModel: ObservableObject {
         // Load clipboard history filtering settings
         self.minTextLength = SettingsManager.shared.minTextLength
         self.deduplicateHistory = SettingsManager.shared.deduplicateHistory
+        self.customHistoryLimit = SettingsManager.shared.customHistoryLimit
     }
     
     func save() {
@@ -423,6 +450,7 @@ class SettingsViewModel: ObservableObject {
         defaults.set(historyLimit.rawValue, forKey: "historyLimit")
         defaults.set(includePrereleases, forKey: "includePrereleases")
         defaults.set(hideStatusBar, forKey: "hideStatusBar")
+        defaults.set(customHistoryLimit, forKey: "customHistoryLimit")
 
         SettingsManager.shared.hotkeyModifiers = hotkeyModifiers
         SettingsManager.shared.hotkeyKeyCode = hotkeyKeyCode
@@ -431,6 +459,7 @@ class SettingsViewModel: ObservableObject {
         SettingsManager.shared.hideStatusBar = hideStatusBar
         SettingsManager.shared.minTextLength = minTextLength
         SettingsManager.shared.deduplicateHistory = deduplicateHistory
+        SettingsManager.shared.customHistoryLimit = customHistoryLimit
         SettingsManager.shared.save()
 
         NotificationCenter.default.post(name: .bufferHotkeyChanged, object: nil)

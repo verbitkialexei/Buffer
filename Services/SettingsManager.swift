@@ -7,12 +7,19 @@ enum HistoryLimit: Int, CaseIterable, Codable {
     case essential  = 200
     case deep       = 1000
     case unlimited  = 0
-    
+    case custom     = -1
+
+    /// Live mirror of SettingsManager's customHistoryLimit. Enum cases cannot hold other
+    /// instances' mutable state, so this static value is the single point of truth that
+    /// maxCount/subtitle read for the .custom case.
+    static var customHistoryLimit: Int = 20_000
+
     var label: String {
         switch self {
         case .essential: return "Essential"
         case .deep:      return "Deep"
         case .unlimited: return "Unlimited"
+        case .custom:    return "Custom"
         }
     }
     
@@ -21,6 +28,7 @@ enum HistoryLimit: Int, CaseIterable, Codable {
         case .essential: return "200 items"
         case .deep:      return "1,000 items"
         case .unlimited: return "No limit"
+        case .custom:    return "\(Self.customHistoryLimit.formatted()) items"
         }
     }
 
@@ -29,9 +37,13 @@ enum HistoryLimit: Int, CaseIterable, Codable {
         case .essential: return 200
         case .deep:      return 1000
         case .unlimited: return nil
+        case .custom:    return Self.customHistoryLimit
         }
     }
 
+    // No code change needed here: the three guard/return lines below already produce the
+    // correct result for every pairing (including .custom) once maxCount is correct for
+    // .custom, because the logic compares live cap values, not cases.
     func isReduction(from current: HistoryLimit) -> Bool {
         guard let currentMax = current.maxCount else {
             return self != .unlimited
@@ -55,6 +67,7 @@ class SettingsManager: ObservableObject {
     private let minTextLengthKey = "minTextLength"
     private let deduplicateHistoryKey = "deduplicateHistory"
     private let contentZoomScaleKey = "contentZoomScale"
+    private let customHistoryLimitKey = "customHistoryLimit"
 
     static let zoomLevels: [Double] = [0.8, 0.9, 1.0, 1.15, 1.3, 1.5]
     static let defaultZoomScale: Double = 1.0
@@ -71,6 +84,7 @@ class SettingsManager: ObservableObject {
     @Published var deduplicateHistory: Bool = false
     @Published var contentZoomScale: Double = defaultZoomScale
     @Published var selectedSettingsTab: Int = 0
+    @Published var customHistoryLimit: Int = 20_000
     
     private init() {
         // Initialize with defaults first, then load saved values
@@ -126,6 +140,10 @@ class SettingsManager: ObservableObject {
         } else {
             self.contentZoomScale = Self.defaultZoomScale
         }
+
+        // Load custom history limit (backward compatible: missing key defaults to 20000)
+        self.customHistoryLimit = defaults.object(forKey: customHistoryLimitKey) as? Int ?? 20_000
+        HistoryLimit.customHistoryLimit = self.customHistoryLimit
     }
     
     func save() {
@@ -137,6 +155,8 @@ class SettingsManager: ObservableObject {
         defaults.set(minTextLength, forKey: minTextLengthKey)
         defaults.set(deduplicateHistory, forKey: deduplicateHistoryKey)
         defaults.set(contentZoomScale, forKey: contentZoomScaleKey)
+        defaults.set(customHistoryLimit, forKey: customHistoryLimitKey)
+        HistoryLimit.customHistoryLimit = customHistoryLimit
     }
 
     func zoomIn() {
