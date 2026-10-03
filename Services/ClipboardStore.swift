@@ -21,7 +21,14 @@ class ClipboardStore: ObservableObject {
     
     private var storageDirectory: URL {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return appSupport.appendingPathComponent("Buffer", isDirectory: true)
+        // Debug builds use a separate data directory so running from Xcode never
+        // reads or overwrites the real release app's clipboard history.
+        #if DEBUG
+        let folderName = "Buffer-dev"
+        #else
+        let folderName = "Buffer"
+        #endif
+        return appSupport.appendingPathComponent(folderName, isDirectory: true)
     }
     
     private var historyFileURL: URL {
