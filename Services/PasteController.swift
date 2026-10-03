@@ -26,6 +26,17 @@ class PasteController {
         return nil
     }
     
+    /// Write a text item's representations as a single pasteboard item (richest flavour first).
+    /// Caller must have called `clearContents()` - `writeObjects` appends to the current owner.
+    private static func writeTextPayload(_ item: ClipboardItem, store: ClipboardStore, to pasteboard: NSPasteboard) {
+        guard let text = store.fullText(for: item) else { return }
+        let pbItem = NSPasteboardItem()
+        if let rtf = item.rtfData { pbItem.setData(rtf, forType: .rtf) }
+        if let html = item.htmlData { pbItem.setData(html, forType: .html) }
+        pbItem.setString(text, forType: .string)
+        pasteboard.writeObjects([pbItem])
+    }
+
     /// Copy item content back to system clipboard
     static func copyToClipboard(_ item: ClipboardItem, store: ClipboardStore) {
         let pasteboard = NSPasteboard.general
@@ -33,10 +44,7 @@ class PasteController {
         
         switch item.type {
         case .text:
-            // Use full text from file if file-backed, otherwise use inline content
-            if let text = store.fullText(for: item) {
-                pasteboard.setString(text, forType: .string)
-            }
+            writeTextPayload(item, store: store, to: pasteboard)
         case .image:
             if let image = store.image(for: item),
                let tiffData = image.tiffRepresentation {
@@ -86,9 +94,7 @@ class PasteController {
         
         switch item.type {
         case .text:
-            if let text = store.fullText(for: item) {
-                pasteboard.setString(text, forType: .string)
-            }
+            writeTextPayload(item, store: store, to: pasteboard)
         case .image:
             if let image = store.image(for: item) {
                 // Save image to temp with proper name
@@ -116,6 +122,10 @@ class PasteController {
     /// Text items are joined with newlines, images are handled individually
     static func pasteMultiple(_ items: [ClipboardItem], store: ClipboardStore, previousApp: NSRunningApplication? = nil) {
         guard !items.isEmpty else { return }
+        if items.count == 1, let first = items.first, first.type == .text {
+            paste(first, store: store, previousApp: previousApp)
+            return
+        }
         
         let pasteboard = NSPasteboard.general
         

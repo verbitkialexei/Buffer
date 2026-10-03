@@ -92,6 +92,13 @@ struct ClipboardItemRow: View {
                     .font(.system(size: 10 * zoomScale))
                     .foregroundColor(.yellow.opacity(0.8))
             }
+
+            // Rich-text badge: signals styled formatting is available for this item
+            if item.hasRichText {
+                Image(systemName: "textformat")
+                    .font(.system(size: 10 * zoomScale))
+                    .foregroundColor(.secondary.opacity(0.6))
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6 * zoomScale)

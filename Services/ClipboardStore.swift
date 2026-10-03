@@ -211,6 +211,8 @@ class ClipboardStore: ObservableObject {
             guard let self = self else { return }
             guard let index = self.items.firstIndex(where: { $0.id == item.id }) else { return }
             self.items[index].textContent = text
+            self.items[index].rtfData = nil
+            self.items[index].htmlData = nil
             let itemsToSave = self.items
             self.saveQueue.async { [weak self] in self?.saveHistoryToDisk(itemsToSave) }
         }
@@ -443,7 +445,7 @@ class ClipboardStore: ObservableObject {
     private func saveHistoryToDisk(_ itemsToSave: [ClipboardItem]) {
         do {
             let data = try JSONEncoder().encode(itemsToSave)
-            try data.write(to: historyFileURL)
+            try data.write(to: historyFileURL, options: .atomic)
         } catch {
             print("[Buffer] Failed to save history: \(error)")
         }

@@ -321,6 +321,95 @@ class ClipboardItemTests: XCTestCase {
         XCTAssertFalse(ClipboardItem.matches(item: imageWithNilOCR, query: "receipt"), "nil ocrText must never match")
     }
 
+    // MARK: - Rich-text preservation (feature 3, commit 3a)
+
+    func testLegacyDecodeWithoutRichTextKeys() throws {
+        // Build the exact JSON shape by encoding sample items first, then stripping the new
+        // keys this feature adds - this guarantees the date/UUID format matches exactly what
+        // JSONEncoder produces, without hand-guessing the format.
+        let textID = UUID()
+        let textTimestamp = Date()
+        let sampleText = ClipboardItem(
+            id: textID, type: .text, timestamp: textTimestamp, sourceApp: "TestApp",
+            textContent: "legacy text", isPinned: true, isBookmarked: false,
+            tags: ["tag1"], ocrText: nil, isTruncated: false, originalSizeBytes: nil
+        )
+        let imageID = UUID()
+        let imageTimestamp = Date()
+        let sampleImage = ClipboardItem(
+            id: imageID, type: .image, timestamp: imageTimestamp, sourceApp: nil,
+            imageFilename: "legacy.png", isPinned: false, isBookmarked: true,
+            tags: [], ocrText: "scanned text", isTruncated: false, originalSizeBytes: nil
+        )
+
+        let encoded = try JSONEncoder().encode([sampleText, sampleImage])
+        var jsonArray = try JSONSerialization.jsonObject(with: encoded) as! [[String: Any]]
+        // Strip the new keys this feature adds, to simulate a genuinely pre-feature payload.
+        for i in jsonArray.indices {
+            jsonArray[i].removeValue(forKey: "rtfData")
+            jsonArray[i].removeValue(forKey: "htmlData")
+        }
+        let legacyData = try JSONSerialization.data(withJSONObject: jsonArray)
+
+        let decoded = try JSONDecoder().decode([ClipboardItem].self, from: legacyData)
+        XCTAssertEqual(decoded.count, 2)
+
+        let decodedText = decoded[0]
+        XCTAssertEqual(decodedText.id, textID)
+        XCTAssertEqual(decodedText.type, .text)
+        XCTAssertEqual(decodedText.textContent, "legacy text")
+        XCTAssertEqual(decodedText.sourceApp, "TestApp")
+        XCTAssertTrue(decodedText.isPinned)
+        XCTAssertEqual(decodedText.tags, ["tag1"])
+        XCTAssertNil(decodedText.ocrText)
+        XCTAssertNil(decodedText.rtfData, "legacy item without rtfData key must decode to nil")
+        XCTAssertNil(decodedText.htmlData, "legacy item without htmlData key must decode to nil")
+
+        let decodedImage = decoded[1]
+        XCTAssertEqual(decodedImage.id, imageID)
+        XCTAssertEqual(decodedImage.type, .image)
+        XCTAssertEqual(decodedImage.imageFilename, "legacy.png")
+        XCTAssertTrue(decodedImage.isBookmarked)
+        XCTAssertEqual(decodedImage.ocrText, "scanned text")
+        XCTAssertNil(decodedImage.rtfData)
+        XCTAssertNil(decodedImage.htmlData)
+    }
+
+    func testRichTextDataRoundTrip() throws {
+        let rtf = "sample rtf".data(using: .utf8)!
+        let html = "<p>sample html</p>".data(using: .utf8)!
+        let item = ClipboardItem.text("styled text", sourceApp: "Notes", rtfData: rtf, htmlData: html)
+
+        let encoded = try JSONEncoder().encode(item)
+        let decoded = try JSONDecoder().decode(ClipboardItem.self, from: encoded)
+
+        XCTAssertEqual(decoded, item)
+        XCTAssertEqual(decoded.rtfData, rtf)
+        XCTAssertEqual(decoded.htmlData, html)
+    }
+
+    func testLegacyItemsEncodeWithoutNewKeys() throws {
+        let item = ClipboardItem.text("x")
+        let encoded = try JSONEncoder().encode(item)
+        let json = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+        XCTAssertNil(json["rtfData"], "an item with no rich data must not add rtfData to the JSON")
+        XCTAssertNil(json["htmlData"], "an item with no rich data must not add htmlData to the JSON")
+    }
+
+    func testHasRichTextCombinations() {
+        let neither = ClipboardItem.text("a")
+        XCTAssertFalse(neither.hasRichText)
+
+        let rtfOnly = ClipboardItem.text("a", rtfData: Data([0x01]))
+        XCTAssertTrue(rtfOnly.hasRichText)
+
+        let htmlOnly = ClipboardItem.text("a", htmlData: Data([0x01]))
+        XCTAssertTrue(htmlOnly.hasRichText)
+
+        let both = ClipboardItem.text("a", rtfData: Data([0x01]), htmlData: Data([0x01]))
+        XCTAssertTrue(both.hasRichText)
+    }
+
     func testZoomableImageViewConstantsAndPresets() {
         XCTAssertEqual(ZoomableImageView.minScale, 1.0)
         XCTAssertEqual(ZoomableImageView.maxScale, 4.0)

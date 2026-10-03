@@ -216,6 +216,27 @@ struct SettingsView: View {
                         .toggleStyle(.switch)
                 }
                 .help("Uses on-device text recognition so screenshots and copied images become searchable automatically.")
+
+                // Rich Content Section
+                Divider()
+                    .padding(.vertical, 4)
+
+                Text("Rich Content")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.secondary)
+
+                HStack {
+                    Text("Preserve formatting when copying")
+                        .font(.system(size: 13, weight: .medium))
+                    Spacer()
+                    Toggle("", isOn: $settings.preserveRichText)
+                        .labelsHidden()
+                        .onChange(of: settings.preserveRichText) { _ in
+                            settings.save()
+                        }
+                        .toggleStyle(.switch)
+                }
+                .help("Stores styled text (RTF/HTML) alongside plain text. Increases history file size.")
                 
                 // History Size Section
                 Divider()
@@ -423,6 +444,7 @@ class SettingsViewModel: ObservableObject {
     @Published var deduplicateHistory: Bool
     @Published var customHistoryLimit: Int
     @Published var autoOCR: Bool
+    @Published var preserveRichText: Bool
     
     private let defaults = UserDefaults.standard
     private let hotkeyModifiersKey = "hotkeyModifiers"
@@ -457,6 +479,7 @@ class SettingsViewModel: ObservableObject {
         self.deduplicateHistory = SettingsManager.shared.deduplicateHistory
         self.customHistoryLimit = SettingsManager.shared.customHistoryLimit
         self.autoOCR = SettingsManager.shared.autoOCR
+        self.preserveRichText = SettingsManager.shared.preserveRichText
     }
     
     func save() {
@@ -476,6 +499,7 @@ class SettingsViewModel: ObservableObject {
         SettingsManager.shared.deduplicateHistory = deduplicateHistory
         SettingsManager.shared.customHistoryLimit = customHistoryLimit
         SettingsManager.shared.autoOCR = autoOCR
+        SettingsManager.shared.preserveRichText = preserveRichText
         SettingsManager.shared.save()
 
         NotificationCenter.default.post(name: .bufferHotkeyChanged, object: nil)

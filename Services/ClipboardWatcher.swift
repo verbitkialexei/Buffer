@@ -18,6 +18,13 @@ class ClipboardWatcher: ObservableObject {
     // Size thresholds for text handling
     private let inlineTextLimit = 50_000       // 50 KB — store inline
     private let previewLength = 500            // Characters kept as inline preview
+    private let richTextLimit = 500_000        // 500 KB per flavour - larger payloads are dropped, plain text still captured
+
+    // Combined-item capture budgets (section 4.3): bound attachment extraction cost and count
+    private let maxEmbeddedImages = 8
+    private let minEmbeddedImageEdge: CGFloat = 32   // POINTS, not pixels - filters visual noise, not resolution
+    private let maxAttributedParseBytes = 10_000_000 // refuse to materialise a document larger than this
+    private let maxAttachmentBytes = 5_000_000       // per attachment, measured on the PNG we would write
 
     static func shouldCaptureText(_ text: String, minimumLength: Int) -> Bool {
         !text.isEmpty && text.count >= minimumLength
@@ -104,6 +111,7 @@ class ClipboardWatcher: ObservableObject {
         // Try to capture text first
         if let text = pasteboard.string(forType: .string),
            Self.shouldCaptureText(text, minimumLength: SettingsManager.shared.minTextLength) {
+            let rich = captureRichText(from: pasteboard)   // (rtf: Data?, html: Data?)
             let textSize = text.utf8.count
             
             // Use prefix hash for large text to avoid expensive full-string hashing
@@ -113,19 +121,8 @@ class ClipboardWatcher: ObservableObject {
             // Skip consecutive duplicates
             if hash != lastContentHash {
                 lastContentHash = hash
-                
-                if textSize <= inlineTextLimit {
-                    // Small text: store inline (current behavior)
-                    let item = ClipboardItem.text(text, sourceApp: sourceApp)
+                if let item = buildTextItem(text: text, sourceApp: sourceApp, rtf: rich.rtf, html: rich.html) {
                     store.add(item)
-                } else {
-                    // Large text: save to file, store preview inline
-                    let preview = String(text.prefix(previewLength))
-                    if let filename = store.saveText(text) {
-                        let item = ClipboardItem.largeText(preview: preview, filename: filename, sourceApp: sourceApp)
-                        store.add(item)
-                        print("[Buffer] Large text (\(textSize / 1024) KB) saved to file: \(filename)")
-                    }
                 }
             }
             return
@@ -148,6 +145,37 @@ class ClipboardWatcher: ObservableObject {
         }
     }
     
+    /// Read the styled flavours of the current pasteboard, honouring the user setting and the size cap.
+    private func captureRichText(from pasteboard: NSPasteboard) -> (rtf: Data?, html: Data?) {
+        guard SettingsManager.shared.preserveRichText else { return (nil, nil) }
+        return (capped(pasteboard.data(forType: .rtf), flavour: "rtf"),
+                capped(pasteboard.data(forType: .html), flavour: "html"))
+    }
+
+    private func capped(_ data: Data?, flavour: String) -> Data? {
+        guard let data = data else { return nil }
+        guard data.count <= richTextLimit else {
+            print("[Buffer] Dropping \(flavour) flavour: \(data.count / 1024) KB exceeds cap")
+            return nil
+        }
+        return data
+    }
+
+    /// Build a text item, choosing inline or file-backed storage by size. Returns nil only if the
+    /// large-text file could not be written (matching today's behaviour of skipping the capture).
+    private func buildTextItem(text: String, sourceApp: String?,
+                                rtf: Data?, html: Data?) -> ClipboardItem? {
+        let textSize = text.utf8.count
+        if textSize <= inlineTextLimit {
+            return ClipboardItem.text(text, sourceApp: sourceApp, rtfData: rtf, htmlData: html)
+        }
+        guard let filename = store.saveText(text) else { return nil }
+        print("[Buffer] Large text (\(textSize / 1024) KB) saved to file: \(filename)")
+        return ClipboardItem.largeText(preview: String(text.prefix(previewLength)),
+                                        filename: filename, sourceApp: sourceApp,
+                                        rtfData: rtf, htmlData: html)
+    }
+
     private func getImageData(from pasteboard: NSPasteboard) -> Data? {
         let imageTypes: [NSPasteboard.PasteboardType] = [.png, .tiff]
         
