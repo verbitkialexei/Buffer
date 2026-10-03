@@ -246,6 +246,7 @@ struct HistoryContentView: View {
     @State private var searchDebounceTask: Task<Void, Never>? = nil
     @State private var selectedIndex = 0
     @State private var previewImage: NSImage?
+    @State private var attachedPreviewImages: [NSImage] = []
     @State private var chunkedText = ChunkedTextState()
     @State private var scrollTrigger = false  // Triggers scroll on keyboard navigation
     @State private var itemSize: Int?         // Holds computed size of item
@@ -737,6 +738,7 @@ struct HistoryContentView: View {
         .task(id: selectedItem?.id) {
             // Clear preview
             previewImage = nil
+            attachedPreviewImages = []
             chunkedText = ChunkedTextState()
             isExtractingText = false
             itemSize = nil
@@ -756,6 +758,7 @@ struct HistoryContentView: View {
                         chunkedText.visibleText = item.textContent ?? ""
                         chunkedText.reachedEOF = true
                     }
+                    if item.isCombined { attachedPreviewImages = await loadImages(item.imageFilenames) }
                 }
             }
         }
@@ -866,7 +869,7 @@ struct HistoryContentView: View {
             },
             onSaveImage: {
                 guard !isEditing else { return }
-                if selectedItem?.type == .image, let img = previewImage {
+                if selectedItem?.hasImages == true, let img = previewImage ?? attachedPreviewImages.first {
                     PasteController.saveImageToDisk(img)
                 }
             },
@@ -926,6 +929,16 @@ struct HistoryContentView: View {
             DispatchQueue.global(qos: .userInitiated).async {
                 let img = store.image(for: item)
                 continuation.resume(returning: img)
+            }
+        }
+    }
+
+    /// Load images off the main thread. Mirrors loadPreviewImage's shape.
+    /// Called with item.imageFilenames for the attachment preview and item.allImageFilenames for OCR.
+    private func loadImages(_ filenames: [String]) async -> [NSImage] {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: filenames.compactMap { store.attachedImage(filename: $0) })
             }
         }
     }
@@ -1133,7 +1146,7 @@ struct HistoryContentView: View {
                         .cornerRadius(4)
                     } else {
                         HStack(spacing: 6) {
-                            Text(item.type == .text ? "Text" : "Image")
+                            Text(item.typeLabel)
                             
                             if item.isFileBacked {
                                 Text("Large")
@@ -1234,9 +1247,9 @@ struct HistoryContentView: View {
                             .buttonStyle(.plain)
                             .help("Copy (⌘C)")
                             
-                            if selectedItem?.type == .image && previewImage != nil {
+                            if selectedItem?.hasImages == true && (previewImage != nil || !attachedPreviewImages.isEmpty) {
                                 Button(action: {
-                                    if let img = previewImage { PasteController.saveImageToDisk(img) }
+                                    if let img = previewImage ?? attachedPreviewImages.first { PasteController.saveImageToDisk(img) }
                                 }) {
                                     Image(systemName: "arrow.down.to.line")
                                 }
@@ -1244,15 +1257,19 @@ struct HistoryContentView: View {
                                 .help("Save image")
                             }
                             
-                            // OCR button — only for image items without existing OCR text
-                            if selectedItem?.type == .image && previewImage != nil && selectedItem?.ocrText == nil {
+                            // OCR button - for any item carrying images (pure image or combined), without existing OCR text
+                            if selectedItem?.hasImages == true, selectedItem?.ocrText == nil {
                                 Button(action: {
                                     Task { @MainActor in
-                                        guard let img = previewImage, let item = selectedItem else { return }
+                                        guard let item = selectedItem else { return }
                                         isExtractingText = true
-                                        let result = await OCRService.shared.recognizeText(from: img)
-                                        let text = result ?? "No text found in this image."
-                                        store.setOCRText(text, for: item)
+                                        let images = await loadImages(item.allImageFilenames)
+                                        var parts: [String] = []
+                                        for image in images {
+                                            if let text = await OCRService.shared.recognizeText(from: image) { parts.append(text) }
+                                        }
+                                        store.setOCRText(parts.isEmpty ? "No text found in this image." : parts.joined(separator: "\n"),
+                                                         for: item)
                                         isExtractingText = false
                                     }
                                 }) {
@@ -1495,30 +1512,14 @@ struct HistoryContentView: View {
     private func itemContent(_ item: ClipboardItem) -> some View {
         switch item.type {
         case .text:
-            if item.isTruncated {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(item.textContent ?? "")
-                        .font(.system(size: previewFontSize, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                    
-                    Label("Content was too large to store (\(formattedSize(bytes: item.originalSizeBytes ?? 0))). Showing first 500 characters.", systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .padding(.top, 4)
+            VStack(alignment: .leading, spacing: 12) {
+                textBody(item)
+                if item.isCombined {
+                    ForEach(Array(attachedPreviewImages.enumerated()), id: \.offset) { _, image in
+                        ZoomableImageView(image: image)
+                    }
                 }
-            } else if item.isFileBacked || (item.textContent?.count ?? 0) > 5000 {
-                textContent(item)
-            } else if isEditing {
-                TextEditor(text: $editText)
-                    .font(.system(size: previewFontSize, design: .monospaced))
-                    .frame(minHeight: 200, maxHeight: .infinity)
-                    .focused($isTextEditorFocused)
-            } else {
-                Text(item.textContent ?? "")
-                    .font(.system(size: previewFontSize, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                ocrSection(item)
             }
         case .image:
             VStack(spacing: 12) {
@@ -1529,40 +1530,72 @@ struct HistoryContentView: View {
                     ProgressView()
                         .frame(maxWidth: .infinity, maxHeight: 200)
                 }
+                ocrSection(item)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func textBody(_ item: ClipboardItem) -> some View {
+        if item.isTruncated {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(item.textContent ?? "")
+                    .font(.system(size: previewFontSize, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 
-                // OCR result
-                if isExtractingText {
-                    ProgressView()
-                        .controlSize(.small)
-                        .padding(.vertical, 12)
-                } else if let ocrText = item.ocrText {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.15))
-                            .frame(height: 0.5)
-                        
-                        HStack(alignment: .top) {
-                            Text(ocrText)
-                                .font(.system(size: previewFontSize))
-                                .textSelection(.enabled)
-                                .lineSpacing(4)
-                                .frame(maxWidth: .infinity, alignment: .topLeading)
-                            
-                            Button(action: {
-                                NotificationCenter.default.post(name: .bufferIgnoreNextChange, object: nil)
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(ocrText, forType: .string)
-                            }) {
-                                Image(systemName: "doc.on.doc")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary.opacity(0.6))
-                            }
-                            .buttonStyle(.plain)
-                            .help("Copy extracted text")
-                        }
-                        .padding(.top, 12)
+                Label("Content was too large to store (\(formattedSize(bytes: item.originalSizeBytes ?? 0))). Showing first 500 characters.", systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .padding(.top, 4)
+            }
+        } else if item.isFileBacked || (item.textContent?.count ?? 0) > 5000 {
+            textContent(item)
+        } else if isEditing {
+            TextEditor(text: $editText)
+                .font(.system(size: previewFontSize, design: .monospaced))
+                .frame(minHeight: 200, maxHeight: .infinity)
+                .focused($isTextEditorFocused)
+        } else {
+            Text(item.textContent ?? "")
+                .font(.system(size: previewFontSize, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    @ViewBuilder
+    private func ocrSection(_ item: ClipboardItem) -> some View {
+        if isExtractingText {
+            ProgressView()
+                .controlSize(.small)
+                .padding(.vertical, 12)
+        } else if let ocrText = item.ocrText {
+            VStack(alignment: .leading, spacing: 0) {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.15))
+                    .frame(height: 0.5)
+                
+                HStack(alignment: .top) {
+                    Text(ocrText)
+                        .font(.system(size: previewFontSize))
+                        .textSelection(.enabled)
+                        .lineSpacing(4)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                    
+                    Button(action: {
+                        NotificationCenter.default.post(name: .bufferIgnoreNextChange, object: nil)
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(ocrText, forType: .string)
+                    }) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary.opacity(0.6))
                     }
+                    .buttonStyle(.plain)
+                    .help("Copy extracted text")
                 }
+                .padding(.top, 12)
             }
         }
     }

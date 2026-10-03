@@ -79,10 +79,11 @@ class ClipboardStore: ObservableObject {
     static func duplicateInlineTextIndex(for item: ClipboardItem, in items: [ClipboardItem]) -> Int? {
         guard item.type == .text,
               !item.isFileBacked,
+              item.imageFilenames.isEmpty,          // a combined item is never a duplicate of plain text
               let text = item.textContent else { return nil }
 
         return items.firstIndex {
-            $0.type == .text && !$0.isFileBacked && $0.textContent == text
+            $0.type == .text && !$0.isFileBacked && $0.imageFilenames.isEmpty && $0.textContent == text
         }
     }
 
@@ -92,6 +93,7 @@ class ClipboardStore: ObservableObject {
         // Promote an existing identical inline text item instead of storing a duplicate.
         if SettingsManager.shared.deduplicateHistory,
            let duplicateIndex = Self.duplicateInlineTextIndex(for: item, in: items) {
+            deleteAssociatedFiles(for: item)   // no-op for anything the predicate can match today
             moveToTop(items[duplicateIndex])
             return
         }
@@ -306,6 +308,34 @@ class ClipboardStore: ObservableObject {
         let url = imagesDirectory.appendingPathComponent(filename)
         return NSImage(contentsOf: url)
     }
+
+    func attachedImage(filename: String) -> NSImage? {
+        NSImage(contentsOf: imagesDirectory.appendingPathComponent(filename))
+    }
+
+    /// Images embedded in a combined item, in document order
+    func attachedImages(for item: ClipboardItem) -> [NSImage] {
+        item.imageFilenames.compactMap { attachedImage(filename: $0) }
+    }
+
+    /// Every image an item owns - pure image first, then attachments. For paste and export.
+    func allImages(for item: ClipboardItem) -> [NSImage] {
+        item.allImageFilenames.compactMap { attachedImage(filename: $0) }
+    }
+
+    /// Representative image for thumbnails and the detail preview
+    func primaryImage(for item: ClipboardItem) -> NSImage? {
+        guard let first = item.allImageFilenames.first else { return nil }
+        return attachedImage(filename: first)
+    }
+
+    /// Remove image files written during a capture that did not complete. Not for live items -
+    /// those go through deleteAssociatedFiles(for:).
+    func removeImageFiles(_ filenames: [String]) {
+        for name in filenames {
+            try? fileManager.removeItem(at: imagesDirectory.appendingPathComponent(name))
+        }
+    }
     
     func saveImage(_ data: Data) -> String? {
         let filename = UUID().uuidString + ".png"
@@ -401,21 +431,29 @@ class ClipboardStore: ObservableObject {
         
         switch item.type {
         case .text:
+            let textBytes: Int
             if let filename = item.textFilename {
                 let url = textsDirectory.appendingPathComponent(filename)
-                let attributes = try? fileManager.attributesOfItem(atPath: url.path)
-                return attributes?[.size] as? Int
+                textBytes = (try? fileManager.attributesOfItem(atPath: url.path))?[.size] as? Int ?? 0
             } else {
-                return item.textContent?.utf8.count
+                textBytes = item.textContent?.utf8.count ?? 0
             }
+            let richBytes = (item.rtfData?.count ?? 0) + (item.htmlData?.count ?? 0) + (item.rtfdData?.count ?? 0)
+            let total = textBytes + richBytes + imageFileBytes(for: item)
+            return total > 0 ? total : nil
         case .image:
-            if let filename = item.imageFilename {
-                let url = imagesDirectory.appendingPathComponent(filename)
-                let attributes = try? fileManager.attributesOfItem(atPath: url.path)
-                return attributes?[.size] as? Int
-            }
+            let bytes = imageFileBytes(for: item)
+            return bytes > 0 ? bytes : nil
         }
-        return nil
+    }
+
+    /// Sum of the on-disk size of every image file an item owns
+    private func imageFileBytes(for item: ClipboardItem) -> Int {
+        item.allImageFilenames.reduce(0) { total, filename in
+            let url = imagesDirectory.appendingPathComponent(filename)
+            let size = (try? fileManager.attributesOfItem(atPath: url.path))?[.size] as? Int ?? 0
+            return total + size
+        }
     }
     
     // MARK: - Private
@@ -451,10 +489,10 @@ class ClipboardStore: ObservableObject {
         }
     }
     
-    private func deleteImageFile(for item: ClipboardItem) {
-        guard item.type == .image, let filename = item.imageFilename else { return }
-        let url = imagesDirectory.appendingPathComponent(filename)
-        try? fileManager.removeItem(at: url)
+    private func deleteImageFiles(for item: ClipboardItem) {
+        for filename in item.allImageFilenames {
+            try? fileManager.removeItem(at: imagesDirectory.appendingPathComponent(filename))
+        }
     }
     
     private func deleteTextFile(for item: ClipboardItem) {
@@ -465,7 +503,7 @@ class ClipboardStore: ObservableObject {
     
     /// Delete all associated files (images and text files) for an item
     private func deleteAssociatedFiles(for item: ClipboardItem) {
-        deleteImageFile(for: item)
+        deleteImageFiles(for: item)
         deleteTextFile(for: item)
     }
 }

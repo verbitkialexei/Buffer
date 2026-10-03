@@ -111,18 +111,59 @@ class ClipboardWatcher: ObservableObject {
         // Try to capture text first
         if let text = pasteboard.string(forType: .string),
            Self.shouldCaptureText(text, minimumLength: SettingsManager.shared.minTextLength) {
-            let rich = captureRichText(from: pasteboard)   // (rtf: Data?, html: Data?)
+            let rich = captureRichText(from: pasteboard)   // (rtf: Data?, html: Data?, rtfd: Data?)
             let textSize = text.utf8.count
-            
+
             // Use prefix hash for large text to avoid expensive full-string hashing
             let hashSource = textSize > inlineTextLimit ? String(text.prefix(10_000)) : text
-            let hash = hashSource.hashValue
-            
-            // Skip consecutive duplicates
-            if hash != lastContentHash {
-                lastContentHash = hash
-                if let item = buildTextItem(text: text, sourceApp: sourceApp, rtf: rich.rtf, html: rich.html) {
-                    store.add(item)
+
+            // Raw attributed flavours, read on the main thread while the pasteboard is still current.
+            // Not filtered by richTextLimit - that cap governs what we STORE. These are bounded instead
+            // by maxAttributedParseBytes inside extractAttachments, which is where the cost actually is.
+            let rtfdFlavour = SettingsManager.shared.preserveRichText ? pasteboard.data(forType: .rtfd) : nil
+            let rtfFlavour = SettingsManager.shared.preserveRichText ? pasteboard.data(forType: .rtf) : nil
+
+            if rtfdFlavour == nil && rtfFlavour == nil {
+                // Fast path, identical to 3a: no attachments possible.
+                let hash = hashSource.hashValue
+                if hash != lastContentHash {
+                    lastContentHash = hash
+                    if let item = buildTextItem(text: text, sourceApp: sourceApp, rtf: rich.rtf, html: rich.html, rtfd: rich.rtfd) {
+                        store.add(item)
+                    }
+                }
+                return
+            }
+
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self = self else { return }
+
+                // 1. Parse. No disk, no network. Bounded by maxAttributedParseBytes.
+                let attachments = self.extractAttachments(rtfd: rtfdFlavour, rtf: rtfFlavour)
+
+                // 2. Hash BEFORE any disk write, mixing attachment bytes so that the same caption
+                //    copied twice with different pictures is not swallowed as a duplicate.
+                let hash = attachments.isEmpty
+                    ? hashSource.hashValue
+                    : attachments.reduce(hashSource.hashValue) { $0 ^ $1.hashValue }
+
+                // 3. Persist attachments.
+                let filenames = attachments.compactMap { self.store.saveImage($0) }
+
+                // 4. Build. On failure, roll back the files we just wrote.
+                guard let item = self.buildTextItem(text: text, sourceApp: sourceApp, rtf: rich.rtf, html: rich.html, rtfd: rich.rtfd, imageFilenames: filenames) else {
+                    self.removeImageFiles(filenames)
+                    return
+                }
+
+                // 5. Gate + record + add, as one unit on the main thread.
+                DispatchQueue.main.async {
+                    guard hash != self.lastContentHash else {
+                        self.removeImageFiles(filenames)     // rejected capture must not leak
+                        return
+                    }
+                    self.lastContentHash = hash
+                    self.store.add(item)
                 }
             }
             return
@@ -146,10 +187,13 @@ class ClipboardWatcher: ObservableObject {
     }
     
     /// Read the styled flavours of the current pasteboard, honouring the user setting and the size cap.
-    private func captureRichText(from pasteboard: NSPasteboard) -> (rtf: Data?, html: Data?) {
-        guard SettingsManager.shared.preserveRichText else { return (nil, nil) }
+    /// .rtfd is captured only as the resolution-2 paste-fidelity fallback (images do not survive via
+    /// .rtf's inline embedding, per feature3-design.md section 4.8) - it is not parsed here.
+    private func captureRichText(from pasteboard: NSPasteboard) -> (rtf: Data?, html: Data?, rtfd: Data?) {
+        guard SettingsManager.shared.preserveRichText else { return (nil, nil, nil) }
         return (capped(pasteboard.data(forType: .rtf), flavour: "rtf"),
-                capped(pasteboard.data(forType: .html), flavour: "html"))
+                capped(pasteboard.data(forType: .html), flavour: "html"),
+                capped(pasteboard.data(forType: .rtfd), flavour: "rtfd"))
     }
 
     private func capped(_ data: Data?, flavour: String) -> Data? {
@@ -164,30 +208,89 @@ class ClipboardWatcher: ObservableObject {
     /// Build a text item, choosing inline or file-backed storage by size. Returns nil only if the
     /// large-text file could not be written (matching today's behaviour of skipping the capture).
     private func buildTextItem(text: String, sourceApp: String?,
-                                rtf: Data?, html: Data?) -> ClipboardItem? {
+                                rtf: Data?, html: Data?, rtfd: Data? = nil,
+                                imageFilenames: [String] = []) -> ClipboardItem? {
         let textSize = text.utf8.count
         if textSize <= inlineTextLimit {
-            return ClipboardItem.text(text, sourceApp: sourceApp, rtfData: rtf, htmlData: html)
+            var item = ClipboardItem.text(text, sourceApp: sourceApp, rtfData: rtf, htmlData: html, rtfdData: rtfd)
+            item.imageFilenames = imageFilenames
+            return item
         }
         guard let filename = store.saveText(text) else { return nil }
         print("[Buffer] Large text (\(textSize / 1024) KB) saved to file: \(filename)")
-        return ClipboardItem.largeText(preview: String(text.prefix(previewLength)),
-                                        filename: filename, sourceApp: sourceApp,
-                                        rtfData: rtf, htmlData: html)
+        var item = ClipboardItem.largeText(preview: String(text.prefix(previewLength)),
+                                            filename: filename, sourceApp: sourceApp,
+                                            rtfData: rtf, htmlData: html, rtfdData: rtfd)
+        item.imageFilenames = imageFilenames
+        return item
+    }
+
+    /// Extract image attachments from an attributed pasteboard flavour. Never performs network I/O.
+    private func extractAttachments(rtfd: Data?, rtf: Data?) -> [Data] {
+        // Pick the preferred flavour that is small enough to parse. A flavour over the cap is not
+        // a reason to fall back to a larger one, so both are tested against the same budget.
+        let source: (data: Data, isRTFD: Bool)?
+        if let rtfd = rtfd, rtfd.count <= maxAttributedParseBytes { source = (rtfd, true) }
+        else if let rtf = rtf, rtf.count <= maxAttributedParseBytes { source = (rtf, false) }
+        else { source = nil }
+
+        guard let source = source else {
+            if let oversized = rtfd ?? rtf {
+                print("[Buffer] Skipping attachment extraction: attributed flavour is \(oversized.count / 1024) KB")
+            }
+            return []
+        }
+
+        let attributed = source.isRTFD
+            ? NSAttributedString(rtfd: source.data, documentAttributes: nil)
+            : NSAttributedString(rtf: source.data, documentAttributes: nil)
+        guard let doc = attributed else { return [] }
+
+        var out: [Data] = []
+        doc.enumerateAttribute(.attachment, in: NSRange(location: 0, length: doc.length)) { value, _, stop in
+            guard out.count < maxEmbeddedImages else { stop.pointee = true; return }
+            guard let attachment = value as? NSTextAttachment else { return }
+            let raw = attachment.fileWrapper?.regularFileContents
+                ?? attachment.image?.tiffRepresentation
+            guard let data = raw,
+                  let image = NSImage(data: data),
+                  image.size.width >= minEmbeddedImageEdge, image.size.height >= minEmbeddedImageEdge,
+                  let png = Self.pngData(from: data),
+                  png.count <= maxAttachmentBytes else { return }
+            out.append(png)
+        }
+        if out.count >= maxEmbeddedImages {
+            print("[Buffer] Capping embedded images at \(maxEmbeddedImages)")
+        }
+        return out
+    }
+
+    /// Shared PNG re-encode used by both pasteboard-image capture and attachment extraction.
+    private static func pngData(from data: Data) -> Data? {
+        guard let image = NSImage(data: data),
+              let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData),
+              let pngData = bitmap.representation(using: .png, properties: [:]) else {
+            return nil
+        }
+        return pngData
+    }
+
+    /// Remove image files written during a capture that did not complete. Not for live items -
+    /// those go through ClipboardStore.deleteAssociatedFiles(for:).
+    private func removeImageFiles(_ filenames: [String]) {
+        guard !filenames.isEmpty else { return }
+        store.removeImageFiles(filenames)
     }
 
     private func getImageData(from pasteboard: NSPasteboard) -> Data? {
         let imageTypes: [NSPasteboard.PasteboardType] = [.png, .tiff]
         
         for type in imageTypes {
+            // Preserves today's raw-data fallback (`?? data`): without it, pasteboard images
+            // that NSImage cannot round-trip stop being captured at all.
             if let data = pasteboard.data(forType: type) {
-                if let image = NSImage(data: data),
-                   let tiffData = image.tiffRepresentation,
-                   let bitmap = NSBitmapImageRep(data: tiffData),
-                   let pngData = bitmap.representation(using: .png, properties: [:]) {
-                    return pngData
-                }
-                return data
+                return Self.pngData(from: data) ?? data
             }
         }
         
@@ -213,10 +316,7 @@ class ClipboardWatcher: ObservableObject {
             let fileData = try Data(contentsOf: fileURL)
             
             // Convert to PNG using the same pattern as pasteboard image handling
-            guard let image = NSImage(data: fileData),
-                  let tiffData = image.tiffRepresentation,
-                  let bitmap = NSBitmapImageRep(data: tiffData),
-                  let pngData = bitmap.representation(using: .png, properties: [:]) else {
+            guard let pngData = Self.pngData(from: fileData) else {
                 print("[Buffer] Failed to convert image file: \(filePath)")
                 return
             }

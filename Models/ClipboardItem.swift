@@ -39,7 +39,15 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     var rtfData: Data?
     var htmlData: Data?
 
-    init(id: UUID = UUID(), type: ClipboardItemType, timestamp: Date = Date(), sourceApp: String? = nil, textContent: String? = nil, textFilename: String? = nil, imageFilename: String? = nil, isPinned: Bool = false, isBookmarked: Bool = false, tags: [String] = [], ocrText: String? = nil, isTruncated: Bool = false, originalSizeBytes: Int? = nil, rtfData: Data? = nil, htmlData: Data? = nil) {
+    // RTFD flavour, captured only as the resolution-2 fallback for when an item carries image
+    // attachments: pasting .rtf alone does not preserve inline images (empirically verified,
+    // see feature3-design.md section 4.8), so .rtfd is written first when present.
+    var rtfdData: Data?
+
+    // Images embedded alongside the text body, in document order (empty for pure text/image items)
+    var imageFilenames: [String] = []
+
+    init(id: UUID = UUID(), type: ClipboardItemType, timestamp: Date = Date(), sourceApp: String? = nil, textContent: String? = nil, textFilename: String? = nil, imageFilename: String? = nil, isPinned: Bool = false, isBookmarked: Bool = false, tags: [String] = [], ocrText: String? = nil, isTruncated: Bool = false, originalSizeBytes: Int? = nil, rtfData: Data? = nil, htmlData: Data? = nil, rtfdData: Data? = nil, imageFilenames: [String] = []) {
         self.id = id
         self.type = type
         self.timestamp = timestamp
@@ -55,12 +63,14 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.originalSizeBytes = originalSizeBytes
         self.rtfData = rtfData
         self.htmlData = htmlData
+        self.rtfdData = rtfdData
+        self.imageFilenames = imageFilenames
     }
     
     enum CodingKeys: String, CodingKey {
         case id, type, timestamp, sourceApp, textContent, textFilename, imageFilename
         case isPinned, isBookmarked, tags, ocrText, isTruncated, originalSizeBytes
-        case rtfData, htmlData
+        case rtfData, htmlData, rtfdData, imageFilenames
     }
 
     init(from decoder: Decoder) throws {
@@ -80,6 +90,8 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.originalSizeBytes = try container.decodeIfPresent(Int.self, forKey: .originalSizeBytes)
         self.rtfData = try container.decodeIfPresent(Data.self, forKey: .rtfData)
         self.htmlData = try container.decodeIfPresent(Data.self, forKey: .htmlData)
+        self.rtfdData = try container.decodeIfPresent(Data.self, forKey: .rtfdData)
+        self.imageFilenames = try container.decodeIfPresent([String].self, forKey: .imageFilenames) ?? []
     }
     
     func encode(to encoder: Encoder) throws {
@@ -99,16 +111,19 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(originalSizeBytes, forKey: .originalSizeBytes)
         try container.encodeIfPresent(rtfData, forKey: .rtfData)
         try container.encodeIfPresent(htmlData, forKey: .htmlData)
+        try container.encodeIfPresent(rtfdData, forKey: .rtfdData)
+        if !imageFilenames.isEmpty { try container.encode(imageFilenames, forKey: .imageFilenames) }
     }
     
     /// Create a text clipboard item
-    static func text(_ content: String, sourceApp: String? = nil, rtfData: Data? = nil, htmlData: Data? = nil) -> ClipboardItem {
+    static func text(_ content: String, sourceApp: String? = nil, rtfData: Data? = nil, htmlData: Data? = nil, rtfdData: Data? = nil) -> ClipboardItem {
         ClipboardItem(
             type: .text,
             sourceApp: sourceApp,
             textContent: content,
             rtfData: rtfData,
-            htmlData: htmlData
+            htmlData: htmlData,
+            rtfdData: rtfdData
         )
     }
     
@@ -122,14 +137,15 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     }
     
     /// Create a large text clipboard item (file-backed with inline preview)
-    static func largeText(preview: String, filename: String, sourceApp: String? = nil, rtfData: Data? = nil, htmlData: Data? = nil) -> ClipboardItem {
+    static func largeText(preview: String, filename: String, sourceApp: String? = nil, rtfData: Data? = nil, htmlData: Data? = nil, rtfdData: Data? = nil) -> ClipboardItem {
         ClipboardItem(
             type: .text,
             sourceApp: sourceApp,
             textContent: preview,
             textFilename: filename,
             rtfData: rtfData,
-            htmlData: htmlData
+            htmlData: htmlData,
+            rtfdData: rtfdData
         )
     }
     
@@ -158,18 +174,48 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     /// Single consumer today is the row badge (Views/ClipboardItemRow.swift) - there is
     /// no detail-pane indicator in scope.
     var hasRichText: Bool { rtfData != nil || htmlData != nil }
-    
+
+    /// All image files this item owns, in a single list - the only correct input for
+    /// file deletion and size accounting.
+    var allImageFilenames: [String] {
+        (imageFilename.map { [$0] } ?? []) + imageFilenames
+    }
+
+    /// True when the item carries at least one image, whether pure image or combined
+    var hasImages: Bool { !allImageFilenames.isEmpty }
+
+    /// True when the item carries both a text body and at least one image
+    var isCombined: Bool { type == .text && !imageFilenames.isEmpty }
+
+    /// Whether this item carries embedded image attachments (combined item), used by the
+    /// row's second badge. Kept distinct from hasRichText (resolution 4) so the two can show
+    /// simultaneously with visually distinct glyphs.
+    var hasAttachedImages: Bool { !imageFilenames.isEmpty }
+
     /// Preview text for display (truncated for long content)
     var previewText: String {
         switch type {
         case .text:
             let text = textContent ?? ""
+            if text.isEmpty {
+                return imageFilenames.isEmpty ? "" : "Image"
+            }
             if text.count > 200 {
                 return String(text.prefix(200)) + "…"
             }
             return text
         case .image:
             return "Image"
+        }
+    }
+
+    /// Header label shown in the detail pane
+    var typeLabel: String {
+        switch type {
+        case .image: return "Image"
+        case .text:
+            guard !imageFilenames.isEmpty else { return "Text" }
+            return imageFilenames.count == 1 ? "Text + Image" : "Text + \(imageFilenames.count) Images"
         }
     }
     

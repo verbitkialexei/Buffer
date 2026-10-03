@@ -319,6 +319,13 @@ class ClipboardItemTests: XCTestCase {
 
         let imageWithNilOCR = ClipboardItem(type: .image, imageFilename: "img3.png", ocrText: nil)
         XCTAssertFalse(ClipboardItem.matches(item: imageWithNilOCR, query: "receipt"), "nil ocrText must never match")
+
+        // Feature 3 (combined items): matches() is type-agnostic by construction - a combined
+        // item (type == .text, non-empty imageFilenames) matches by textContent exactly like
+        // any other text item, with no special-casing required.
+        var combinedItem = ClipboardItem.text("combined item body text")
+        combinedItem.imageFilenames = ["attachment.png"]
+        XCTAssertTrue(ClipboardItem.matches(item: combinedItem, query: "body"), "combined item should match by textContent like any text item")
     }
 
     // MARK: - Rich-text preservation (feature 3, commit 3a)
@@ -348,6 +355,8 @@ class ClipboardItemTests: XCTestCase {
         for i in jsonArray.indices {
             jsonArray[i].removeValue(forKey: "rtfData")
             jsonArray[i].removeValue(forKey: "htmlData")
+            jsonArray[i].removeValue(forKey: "rtfdData")
+            jsonArray[i].removeValue(forKey: "imageFilenames")
         }
         let legacyData = try JSONSerialization.data(withJSONObject: jsonArray)
 
@@ -364,6 +373,8 @@ class ClipboardItemTests: XCTestCase {
         XCTAssertNil(decodedText.ocrText)
         XCTAssertNil(decodedText.rtfData, "legacy item without rtfData key must decode to nil")
         XCTAssertNil(decodedText.htmlData, "legacy item without htmlData key must decode to nil")
+        XCTAssertNil(decodedText.rtfdData, "legacy item without rtfdData key must decode to nil")
+        XCTAssertEqual(decodedText.imageFilenames, [], "legacy item without imageFilenames key must decode to []")
 
         let decodedImage = decoded[1]
         XCTAssertEqual(decodedImage.id, imageID)
@@ -373,12 +384,16 @@ class ClipboardItemTests: XCTestCase {
         XCTAssertEqual(decodedImage.ocrText, "scanned text")
         XCTAssertNil(decodedImage.rtfData)
         XCTAssertNil(decodedImage.htmlData)
+        XCTAssertNil(decodedImage.rtfdData)
+        XCTAssertEqual(decodedImage.imageFilenames, [])
     }
 
     func testRichTextDataRoundTrip() throws {
         let rtf = "sample rtf".data(using: .utf8)!
         let html = "<p>sample html</p>".data(using: .utf8)!
-        let item = ClipboardItem.text("styled text", sourceApp: "Notes", rtfData: rtf, htmlData: html)
+        let rtfd = "sample rtfd".data(using: .utf8)!
+        var item = ClipboardItem.text("styled text", sourceApp: "Notes", rtfData: rtf, htmlData: html, rtfdData: rtfd)
+        item.imageFilenames = ["attachment1.png", "attachment2.png"]
 
         let encoded = try JSONEncoder().encode(item)
         let decoded = try JSONDecoder().decode(ClipboardItem.self, from: encoded)
@@ -386,6 +401,8 @@ class ClipboardItemTests: XCTestCase {
         XCTAssertEqual(decoded, item)
         XCTAssertEqual(decoded.rtfData, rtf)
         XCTAssertEqual(decoded.htmlData, html)
+        XCTAssertEqual(decoded.rtfdData, rtfd)
+        XCTAssertEqual(decoded.imageFilenames, ["attachment1.png", "attachment2.png"])
     }
 
     func testLegacyItemsEncodeWithoutNewKeys() throws {
@@ -394,6 +411,8 @@ class ClipboardItemTests: XCTestCase {
         let json = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
         XCTAssertNil(json["rtfData"], "an item with no rich data must not add rtfData to the JSON")
         XCTAssertNil(json["htmlData"], "an item with no rich data must not add htmlData to the JSON")
+        XCTAssertNil(json["rtfdData"], "an item with no rich data must not add rtfdData to the JSON")
+        XCTAssertNil(json["imageFilenames"], "an item with no attachments must not add imageFilenames to the JSON")
     }
 
     func testHasRichTextCombinations() {
@@ -408,6 +427,82 @@ class ClipboardItemTests: XCTestCase {
 
         let both = ClipboardItem.text("a", rtfData: Data([0x01]), htmlData: Data([0x01]))
         XCTAssertTrue(both.hasRichText)
+    }
+
+    // MARK: - Combined items (feature 3, commit 3b)
+
+    func testPreviewTextForAllShapes() {
+        var combinedWithBody = ClipboardItem.text("some body text")
+        combinedWithBody.imageFilenames = ["a.png"]
+        XCTAssertEqual(combinedWithBody.previewText, "some body text")
+
+        var combinedEmptyBody = ClipboardItem.text("")
+        combinedEmptyBody.imageFilenames = ["a.png"]
+        XCTAssertEqual(combinedEmptyBody.previewText, "Image", "combined item with an empty body should render as Image, not blank")
+
+        let pureImage = ClipboardItem.image(filename: "pure.png")
+        XCTAssertEqual(pureImage.previewText, "Image")
+
+        let pureText = ClipboardItem.text("plain text")
+        XCTAssertEqual(pureText.previewText, "plain text")
+
+        let emptyPureText = ClipboardItem.text("")
+        XCTAssertEqual(emptyPureText.previewText, "", "empty pure text item should render as an empty string, exactly as today")
+    }
+
+    func testTypeLabelAndImageAggregationForAllShapes() {
+        let pureText = ClipboardItem.text("x")
+        XCTAssertEqual(pureText.typeLabel, "Text")
+        XCTAssertFalse(pureText.hasImages)
+        XCTAssertFalse(pureText.isCombined)
+        XCTAssertFalse(pureText.hasAttachedImages)
+
+        let pureImage = ClipboardItem.image(filename: "pure.png")
+        XCTAssertEqual(pureImage.typeLabel, "Image")
+        XCTAssertEqual(pureImage.allImageFilenames, ["pure.png"])
+        XCTAssertTrue(pureImage.hasImages)
+        XCTAssertFalse(pureImage.isCombined, "a pure image item is never isCombined - that predicate requires type == .text")
+        XCTAssertFalse(pureImage.hasAttachedImages, "pure image uses imageFilename, not imageFilenames")
+
+        var combinedOne = ClipboardItem.text("x")
+        combinedOne.imageFilenames = ["attachment.png"]
+        XCTAssertEqual(combinedOne.typeLabel, "Text + Image")
+        XCTAssertEqual(combinedOne.allImageFilenames, ["attachment.png"])
+        XCTAssertTrue(combinedOne.hasImages)
+        XCTAssertTrue(combinedOne.isCombined)
+        XCTAssertTrue(combinedOne.hasAttachedImages)
+
+        var combinedMany = ClipboardItem.text("x")
+        combinedMany.imageFilenames = ["a1.png", "a2.png", "a3.png"]
+        XCTAssertEqual(combinedMany.typeLabel, "Text + 3 Images")
+        XCTAssertTrue(combinedMany.isCombined)
+
+        // allImageFilenames ordering: pure imageFilename first, then attachments in order.
+        // This combination (both imageFilename and imageFilenames set) is never produced by the
+        // capture path, but the computed property must still order correctly if it ever occurs.
+        var withBoth = ClipboardItem(type: .text, textContent: "x", imageFilename: "first.png")
+        withBoth.imageFilenames = ["second.png", "third.png"]
+        XCTAssertEqual(withBoth.allImageFilenames, ["first.png", "second.png", "third.png"])
+    }
+
+    func testDuplicateInlineTextIndexExcludesCombinedItems() {
+        let pureText = ClipboardItem.text("same body")
+        var combined = ClipboardItem.text("same body")
+        combined.imageFilenames = ["attachment.png"]
+        let items = [pureText, combined]
+
+        // A combined item is never considered a duplicate of a pure-text item with the same body.
+        XCTAssertNil(
+            ClipboardStore.duplicateInlineTextIndex(for: combined, in: items),
+            "a combined item must never match as a duplicate, even with identical text"
+        )
+
+        // Existing pure-text duplicate detection still works unchanged.
+        XCTAssertEqual(
+            ClipboardStore.duplicateInlineTextIndex(for: .text("same body"), in: items),
+            0,
+            "a pure-text item should still match an existing pure-text duplicate"
+        )
     }
 
     func testZoomableImageViewConstantsAndPresets() {

@@ -226,7 +226,7 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
 
                 HStack {
-                    Text("Preserve formatting when copying")
+                    Text("Preserve formatting and embedded images")
                         .font(.system(size: 13, weight: .medium))
                     Spacer()
                     Toggle("", isOn: $settings.preserveRichText)
@@ -236,7 +236,7 @@ struct SettingsView: View {
                         }
                         .toggleStyle(.switch)
                 }
-                .help("Stores styled text (RTF/HTML) alongside plain text. Increases history file size.")
+                .help("Stores styled text (RTF/HTML) and images embedded in copied text alongside the plain text. Increases history file size.")
                 
                 // History Size Section
                 Divider()
