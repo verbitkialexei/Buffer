@@ -265,7 +265,22 @@ class ClipboardStore: ObservableObject {
             }
         }
     }
-    
+
+    /// Set the manual syntax-highlighting language override for a text item.
+    /// Pass nil for auto-detect, "" to force Plain Text, or a highlight.js language name.
+    func setLanguage(_ language: String?, for item: ClipboardItem) {
+        runOnMain { [weak self] in
+            guard let self = self else { return }
+            guard let index = self.items.firstIndex(where: { $0.id == item.id }) else { return }
+            self.items[index].language = language
+
+            let itemsToSave = self.items
+            self.saveQueue.async { [weak self] in
+                self?.saveHistoryToDisk(itemsToSave)
+            }
+        }
+    }
+
     /// Move an item to the top of the list (most recent position)
     func moveToTop(_ item: ClipboardItem) {
         runOnMain { [weak self] in

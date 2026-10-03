@@ -219,6 +219,8 @@ struct HistoryContentView: View {
     @ObservedObject var store: ClipboardStore
     @ObservedObject private var updateService = UpdateService.shared
     @ObservedObject private var settings = SettingsManager.shared
+    @ObservedObject private var highlightCache = SyntaxHighlightCache.shared
+    @Environment(\.colorScheme) private var colorScheme
     /// Set to true by HistoryWindowController when the window has been closed for more than
     /// 1.5 minutes (or on the very first open). The view resets search/tag state only when this
     /// is true, then writes false back so a second notification in the same session is a no-op.
@@ -1171,7 +1173,11 @@ struct HistoryContentView: View {
                         .cornerRadius(4)
                     }
                 }
-                
+
+                if let item = selectedItem, languagePickerApplies(to: item) {
+                    languagePicker(for: item)
+                }
+
                 Spacer()
                 
                 if showZoomBadge {
@@ -1557,10 +1563,94 @@ struct HistoryContentView: View {
                 .frame(minHeight: 200, maxHeight: .infinity)
                 .focused($isTextEditorFocused)
         } else {
-            Text(item.textContent ?? "")
+            highlightedTextBody(item)
+        }
+    }
+
+    /// Small-text preview branch: syntax-highlighted when the content looks like code,
+    /// otherwise plain monospaced. Rich-formatted items (rtfData/htmlData) are never
+    /// syntax-highlighted - their formatting is their representation.
+    @ViewBuilder
+    private func highlightedTextBody(_ item: ClipboardItem) -> some View {
+        let text = item.textContent ?? ""
+        // `highlightCache.generation` is referenced so SwiftUI re-renders when an async
+        // highlight result lands for this item.
+        let _ = highlightCache.generation
+        if !item.hasRichText,
+           let attributed = highlightCache.highlightedString(
+               for: item,
+               text: text,
+               fontSize: previewFontSize,
+               dark: colorScheme == .dark
+           ) {
+            HighlightedTextView(attributedText: attributed)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        } else {
+            Text(text)
                 .font(.system(size: previewFontSize, design: .monospaced))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    /// The language picker is only meaningful for inline text items that are not rich-formatted
+    /// and not shown through the large-text chunked path (which stays plain for performance).
+    private func languagePickerApplies(to item: ClipboardItem) -> Bool {
+        guard item.type == .text, !item.hasRichText, !item.isTruncated else { return false }
+        if item.isFileBacked || (item.textContent?.count ?? 0) > 5000 { return false }
+        return !(item.textContent ?? "").isEmpty
+    }
+
+    /// A compact menu to override the detected language for the selected item.
+    /// Auto (nil), Plain Text (""), or any supported language. The choice persists per item.
+    @ViewBuilder
+    private func languagePicker(for item: ClipboardItem) -> some View {
+        let current = item.language
+        Menu {
+            Button(action: { store.setLanguage(nil, for: item) }) {
+                languageMenuLabel("Auto", selected: current == nil)
+            }
+            Button(action: { store.setLanguage("", for: item) }) {
+                languageMenuLabel("Plain Text", selected: current == "")
+            }
+            Divider()
+            ForEach(highlightCache.supportedLanguages(), id: \.self) { lang in
+                Button(action: { store.setLanguage(lang, for: item) }) {
+                    languageMenuLabel(lang, selected: current == lang)
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .font(.system(size: 9))
+                Text(languagePickerTitle(current))
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Color.secondary.opacity(0.12))
+            .cornerRadius(4)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Syntax highlighting language")
+    }
+
+    private func languagePickerTitle(_ current: String?) -> String {
+        switch current {
+        case .none: return "Auto"
+        case .some(""): return "Plain"
+        case .some(let lang): return lang
+        }
+    }
+
+    @ViewBuilder
+    private func languageMenuLabel(_ title: String, selected: Bool) -> some View {
+        if selected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
         }
     }
 

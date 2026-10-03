@@ -47,7 +47,11 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     // Images embedded alongside the text body, in document order (empty for pure text/image items)
     var imageFilenames: [String] = []
 
-    init(id: UUID = UUID(), type: ClipboardItemType, timestamp: Date = Date(), sourceApp: String? = nil, textContent: String? = nil, textFilename: String? = nil, imageFilename: String? = nil, isPinned: Bool = false, isBookmarked: Bool = false, tags: [String] = [], ocrText: String? = nil, isTruncated: Bool = false, originalSizeBytes: Int? = nil, rtfData: Data? = nil, htmlData: Data? = nil, rtfdData: Data? = nil, imageFilenames: [String] = []) {
+    // Manual syntax-highlighting language override for text items.
+    // nil means auto-detect; "" (empty) means the user forced Plain Text (no highlighting).
+    var language: String?
+
+    init(id: UUID = UUID(), type: ClipboardItemType, timestamp: Date = Date(), sourceApp: String? = nil, textContent: String? = nil, textFilename: String? = nil, imageFilename: String? = nil, isPinned: Bool = false, isBookmarked: Bool = false, tags: [String] = [], ocrText: String? = nil, isTruncated: Bool = false, originalSizeBytes: Int? = nil, rtfData: Data? = nil, htmlData: Data? = nil, rtfdData: Data? = nil, imageFilenames: [String] = [], language: String? = nil) {
         self.id = id
         self.type = type
         self.timestamp = timestamp
@@ -65,12 +69,13 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.htmlData = htmlData
         self.rtfdData = rtfdData
         self.imageFilenames = imageFilenames
+        self.language = language
     }
     
     enum CodingKeys: String, CodingKey {
         case id, type, timestamp, sourceApp, textContent, textFilename, imageFilename
         case isPinned, isBookmarked, tags, ocrText, isTruncated, originalSizeBytes
-        case rtfData, htmlData, rtfdData, imageFilenames
+        case rtfData, htmlData, rtfdData, imageFilenames, language
     }
 
     init(from decoder: Decoder) throws {
@@ -92,6 +97,7 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         self.htmlData = try container.decodeIfPresent(Data.self, forKey: .htmlData)
         self.rtfdData = try container.decodeIfPresent(Data.self, forKey: .rtfdData)
         self.imageFilenames = try container.decodeIfPresent([String].self, forKey: .imageFilenames) ?? []
+        self.language = try container.decodeIfPresent(String.self, forKey: .language)
     }
     
     func encode(to encoder: Encoder) throws {
@@ -113,6 +119,7 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(htmlData, forKey: .htmlData)
         try container.encodeIfPresent(rtfdData, forKey: .rtfdData)
         if !imageFilenames.isEmpty { try container.encode(imageFilenames, forKey: .imageFilenames) }
+        try container.encodeIfPresent(language, forKey: .language)
     }
     
     /// Create a text clipboard item

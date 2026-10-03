@@ -512,4 +512,91 @@ class ClipboardItemTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(ZoomableImageView.defaultDoubleTapScale, ZoomableImageView.minScale)
         XCTAssertLessThanOrEqual(ZoomableImageView.defaultDoubleTapScale, ZoomableImageView.maxScale)
     }
+
+    // MARK: - Feature 4: LanguageDetector heuristics
+
+    func testDetectorLeavesProsePlain() {
+        let prose = "This is an ordinary paragraph of English text that a person might copy from an article or an email, with nothing code-like about it at all."
+        XCTAssertEqual(LanguageDetector.detect(prose), .plain)
+    }
+
+    func testDetectorIgnoresShortFragments() {
+        XCTAssertEqual(LanguageDetector.detect("hello"), .plain)
+        XCTAssertEqual(LanguageDetector.detect("a short line"), .plain)
+    }
+
+    func testDetectorRecognizesJSON() {
+        let json = "{\"name\": \"buffer\", \"version\": 2, \"tags\": [\"a\", \"b\"]}"
+        XCTAssertEqual(LanguageDetector.detect(json), .code(hint: "json"))
+    }
+
+    func testDetectorRejectsInvalidJSONAsPlainOrCode() {
+        // Looks brace-y but is not valid JSON; must not be reported as json.
+        let notJSON = "{ this is not json at all, just prose in braces maybe }"
+        if case .code(let hint) = LanguageDetector.detect(notJSON) {
+            XCTAssertNotEqual(hint, "json")
+        }
+    }
+
+    func testDetectorRecognizesShellShebang() {
+        XCTAssertEqual(LanguageDetector.detect("#!/bin/bash\necho hello world here"), .code(hint: "bash"))
+        XCTAssertEqual(LanguageDetector.detect("#!/usr/bin/env python\nprint('hi there')"), .code(hint: "python"))
+    }
+
+    func testDetectorRecognizesDiff() {
+        let diff = "diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new"
+        XCTAssertEqual(LanguageDetector.detect(diff), .code(hint: "diff"))
+    }
+
+    func testDetectorRecognizesSQL() {
+        let sql = "SELECT id, name FROM users WHERE active = 1 ORDER BY name;"
+        XCTAssertEqual(LanguageDetector.detect(sql), .code(hint: nil))
+    }
+
+    func testDetectorRecognizesXMLHTML() {
+        let html = "<!DOCTYPE html>\n<html><body><div>hi</div></body></html>"
+        XCTAssertEqual(LanguageDetector.detect(html), .code(hint: "xml"))
+    }
+
+    func testDetectorRecognizesGenericCode() {
+        let swift = "func greet(name: String) -> String {\n    return \"Hello, \\(name)\"\n}"
+        if case .plain = LanguageDetector.detect(swift) {
+            XCTFail("Expected code detection for a Swift function body")
+        }
+    }
+
+    // MARK: - Feature 4: language override Codable round-trip
+
+    func testLanguageFieldRoundTrips() throws {
+        let item = ClipboardItem(type: .text, textContent: "SELECT 1", language: "sql")
+        let data = try JSONEncoder().encode(item)
+        let decoded = try JSONDecoder().decode(ClipboardItem.self, from: data)
+        XCTAssertEqual(decoded.language, "sql")
+    }
+
+    func testForcedPlainEmptyLanguageRoundTrips() throws {
+        let item = ClipboardItem(type: .text, textContent: "not code", language: "")
+        let data = try JSONEncoder().encode(item)
+        let decoded = try JSONDecoder().decode(ClipboardItem.self, from: data)
+        XCTAssertEqual(decoded.language, "")
+    }
+
+    func testOldPayloadWithoutLanguageDecodes() throws {
+        // A history.json entry written before feature 4 existed: no "language" key.
+        let json = """
+        {
+            "id": "\(UUID().uuidString)",
+            "type": "text",
+            "timestamp": 760000000,
+            "textContent": "hello",
+            "isPinned": false,
+            "isBookmarked": false,
+            "tags": [],
+            "isTruncated": false
+        }
+        """
+        let decoded = try JSONDecoder().decode(ClipboardItem.self, from: Data(json.utf8))
+        XCTAssertNil(decoded.language)
+        XCTAssertEqual(decoded.textContent, "hello")
+    }
 }
