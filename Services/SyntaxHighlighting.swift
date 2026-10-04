@@ -25,7 +25,12 @@ protocol SyntaxHighlighting {
 /// Thread-safety: `Highlighter` wraps a JavaScriptCore context and is not safe to touch from
 /// multiple threads at once, so all access is serialized through a dedicated queue. Callers are
 /// expected to invoke `highlight` off the main thread (see `SyntaxHighlightCache`).
-final class HighlighterSwiftEngine: SyntaxHighlighting {
+final class HighlighterSwiftEngine: SyntaxHighlighting, @unchecked Sendable {
+
+    /// Shared instance. Safe to use across threads: all engine access is serialized through
+    /// an internal queue (`@unchecked Sendable` reflects that this is hand-verified, since the
+    /// wrapped Highlighter/JSContext is not itself Sendable).
+    static let shared = HighlighterSwiftEngine()
 
     /// Above this many bytes we never highlight - highlight.js tokenizing a multi-megabyte
     /// paste would hang the UI, and the preview for such content is the chunked plain-text
@@ -74,74 +79,6 @@ final class HighlighterSwiftEngine: SyntaxHighlighting {
             let langParam = (language?.isEmpty == false) ? language : nil
             return highlighter.highlight(code, as: langParam)
         }
-    }
-}
-
-/// Caches highlighted output per item and runs highlighting off the main thread.
-///
-/// SwiftUI views observe this; a view asks for the highlighted string for a specific item id,
-/// gets nil immediately if it is not ready, and is re-rendered when the async result lands.
-/// Stale requests (selection moved on) are discarded by comparing the requested id on completion.
-@MainActor
-final class SyntaxHighlightCache: ObservableObject {
-    static let shared = SyntaxHighlightCache()
-
-    private let engine: SyntaxHighlighting
-    /// Keyed by a composite of item id + language + font size + appearance, so a zoom or theme
-    /// change produces a fresh render rather than a stale cached one.
-    private var cache: [String: NSAttributedString] = [:]
-    private var inFlight: Set<String> = []
-
-    /// Published only to trigger SwiftUI updates when a new result is cached.
-    @Published private(set) var generation: Int = 0
-
-    init(engine: SyntaxHighlighting = HighlighterSwiftEngine()) {
-        self.engine = engine
-    }
-
-    func supportedLanguages() -> [String] { engine.supportedLanguages() }
-
-    private func key(id: UUID, language: String?, fontSize: CGFloat, dark: Bool) -> String {
-        "\(id.uuidString)|\(language ?? "~auto")|\(Int(fontSize))|\(dark ? "d" : "l")"
-    }
-
-    /// Return a cached highlighted string if present. If absent, kick off an async highlight
-    /// and return nil now; the view updates via `generation` when it completes.
-    ///
-    /// Returns nil (and starts no work) when the detector says this is not code, so prose is
-    /// never highlighted. When `language` is a non-empty override, detection is bypassed.
-    func highlightedString(for item: ClipboardItem, text: String, fontSize: CGFloat, dark: Bool) -> NSAttributedString? {
-        // Resolve the language: explicit override wins; otherwise run detection.
-        let resolvedLanguage: String?
-        if let override = item.language {
-            // "" means the user forced Plain Text - never highlight.
-            if override.isEmpty { return nil }
-            resolvedLanguage = override
-        } else {
-            switch LanguageDetector.detect(text) {
-            case .plain:
-                return nil
-            case .code(let hint):
-                resolvedLanguage = hint
-            }
-        }
-
-        let k = key(id: item.id, language: resolvedLanguage, fontSize: fontSize, dark: dark)
-        if let cached = cache[k] { return cached }
-        guard !inFlight.contains(k) else { return nil }
-        inFlight.insert(k)
-
-        Task.detached(priority: .userInitiated) { [engine] in
-            let result = engine.highlight(text, language: resolvedLanguage, fontSize: fontSize, dark: dark)
-            await MainActor.run {
-                self.inFlight.remove(k)
-                if let result = result {
-                    self.cache[k] = result
-                    self.generation &+= 1
-                }
-            }
-        }
-        return nil
     }
 }
 

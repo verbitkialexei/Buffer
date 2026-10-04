@@ -219,7 +219,6 @@ struct HistoryContentView: View {
     @ObservedObject var store: ClipboardStore
     @ObservedObject private var updateService = UpdateService.shared
     @ObservedObject private var settings = SettingsManager.shared
-    @ObservedObject private var highlightCache = SyntaxHighlightCache.shared
     @Environment(\.colorScheme) private var colorScheme
     /// Set to true by HistoryWindowController when the window has been closed for more than
     /// 1.5 minutes (or on the very first open). The view resets search/tag state only when this
@@ -249,6 +248,7 @@ struct HistoryContentView: View {
     @State private var selectedIndex = 0
     @State private var previewImage: NSImage?
     @State private var attachedPreviewImages: [NSImage] = []
+    @State private var highlightedPreview: NSAttributedString?
     @State private var chunkedText = ChunkedTextState()
     @State private var scrollTrigger = false  // Triggers scroll on keyboard navigation
     @State private var itemSize: Int?         // Holds computed size of item
@@ -737,10 +737,11 @@ struct HistoryContentView: View {
         .onAppear {
             updateFilteredItems()
         }
-        .task(id: selectedItem?.id) {
+        .task(id: highlightTaskID) {
             // Clear preview
             previewImage = nil
             attachedPreviewImages = []
+            highlightedPreview = nil
             chunkedText = ChunkedTextState()
             isExtractingText = false
             itemSize = nil
@@ -759,6 +760,7 @@ struct HistoryContentView: View {
                     } else {
                         chunkedText.visibleText = item.textContent ?? ""
                         chunkedText.reachedEOF = true
+                        await loadHighlight(for: item)
                     }
                     if item.isCombined { attachedPreviewImages = await loadImages(item.imageFilenames) }
                 }
@@ -1573,22 +1575,55 @@ struct HistoryContentView: View {
     /// code files while staying under the highlighter's own 100 KB byte cap.
     static let inlineHighlightCharLimit = 20_000
 
-    /// Small-text preview branch: syntax-highlighted when the content looks like code,
-    /// otherwise plain monospaced. Rich-formatted items (rtfData/htmlData) are never
-    /// syntax-highlighted - their formatting is their representation.
+    /// Composite identity for the preview-loading task: re-run highlighting when the selected
+    /// item, its language override, the zoom level, or the system appearance changes.
+    private var highlightTaskID: String {
+        let item = selectedItem
+        let lang = item?.language ?? "~auto"
+        return "\(item?.id.uuidString ?? "none")|\(lang)|\(Int(previewFontSize))|\(colorScheme == .dark ? "d" : "l")"
+    }
+
+    /// Compute the highlighted preview for an inline text item off the main thread and store it
+    /// in `highlightedPreview`. Mirrors how `previewImage` is loaded, so SwiftUI reliably
+    /// re-renders when the result lands. Leaves `highlightedPreview` nil (plain fallback) for
+    /// rich-formatted content, forced-plain overrides, prose, or anything over the size cap.
+    private func loadHighlight(for item: ClipboardItem) async {
+        guard !item.hasRichText else { return }
+        let text = item.textContent ?? ""
+        guard !text.isEmpty else { return }
+
+        // Resolve language: explicit override wins; "" = forced plain; otherwise detect.
+        let language: String?
+        if let override = item.language {
+            if override.isEmpty { return }
+            language = override
+        } else {
+            switch LanguageDetector.detect(text) {
+            case .plain: return
+            case .code(let hint): language = hint
+            }
+        }
+
+        let dark = colorScheme == .dark
+        let size = previewFontSize
+        let engine = HighlighterSwiftEngine.shared
+        let result = await Task.detached(priority: .userInitiated) {
+            engine.highlight(text, language: language, fontSize: size, dark: dark)
+        }.value
+
+        // Only apply if this is still the selected item (avoid a stale async result landing
+        // after the user navigated away).
+        if selectedItem?.id == item.id {
+            highlightedPreview = result
+        }
+    }
+
+    /// Small-text preview branch: syntax-highlighted when a highlighted representation has been
+    /// computed, otherwise plain monospaced. Rich-formatted items are never highlighted.
     @ViewBuilder
     private func highlightedTextBody(_ item: ClipboardItem) -> some View {
         let text = item.textContent ?? ""
-        // `highlightCache.generation` is referenced so SwiftUI re-renders when an async
-        // highlight result lands for this item.
-        let _ = highlightCache.generation
-        if !item.hasRichText,
-           let attributed = highlightCache.highlightedString(
-               for: item,
-               text: text,
-               fontSize: previewFontSize,
-               dark: colorScheme == .dark
-           ) {
+        if let attributed = highlightedPreview {
             HighlightedTextView(attributedText: attributed)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         } else {
@@ -1620,7 +1655,7 @@ struct HistoryContentView: View {
                 languageMenuLabel("Plain Text", selected: current == "")
             }
             Divider()
-            ForEach(highlightCache.supportedLanguages(), id: \.self) { lang in
+            ForEach(HighlighterSwiftEngine.shared.supportedLanguages(), id: \.self) { lang in
                 Button(action: { store.setLanguage(lang, for: item) }) {
                     languageMenuLabel(lang, selected: current == lang)
                 }
