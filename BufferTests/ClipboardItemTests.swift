@@ -599,4 +599,28 @@ class ClipboardItemTests: XCTestCase {
         XCTAssertNil(decoded.language)
         XCTAssertEqual(decoded.textContent, "hello")
     }
+
+    // MARK: - Format button: CodeFormatter
+
+    func testFormatterPrettyPrintsMinifiedJSON() {
+        let minified = "{\"b\":2,\"a\":[1,2,3]}"
+        let result = CodeFormatter.format(minified, language: "json")
+        XCTAssertNotNil(result)
+        XCTAssertTrue(result!.contains("\n"), "formatted JSON should be multi-line")
+        // Key order is preserved (not sorted): b before a.
+        let bIndex = result!.range(of: "\"b\"")!.lowerBound
+        let aIndex = result!.range(of: "\"a\"")!.lowerBound
+        XCTAssertLessThan(bIndex, aIndex)
+    }
+
+    func testFormatterRejectsInvalidJSON() {
+        XCTAssertNil(CodeFormatter.format("{not valid json", language: "json"))
+    }
+
+    func testFormatterCanFormatDetectsJSONAndXML() {
+        XCTAssertTrue(CodeFormatter.canFormat(language: nil, text: "{\"a\":1}"))
+        XCTAssertTrue(CodeFormatter.canFormat(language: "xml", text: "<a><b/></a>"))
+        XCTAssertFalse(CodeFormatter.canFormat(language: "swift", text: "let x = 1"))
+        XCTAssertFalse(CodeFormatter.canFormat(language: nil, text: "just some prose here"))
+    }
 }

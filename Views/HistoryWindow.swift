@@ -1244,6 +1244,15 @@ struct HistoryContentView: View {
                                 .help("Edit item (⌘E)")
                             }
 
+                            if let item = selectedItem, formatButtonApplies(to: item) {
+                                Button(action: { formatSelected(item) }) {
+                                    Image(systemName: "text.alignleft")
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundColor(.primary)
+                                .help("Format (pretty-print JSON or XML)")
+                            }
+
                             Button(action: {
                                 if let item = selectedItem {
                                     onCopyToClipboard(item)
@@ -1642,6 +1651,31 @@ struct HistoryContentView: View {
         guard item.type == .text, !item.isTruncated else { return false }
         if item.isFileBacked || (item.textContent?.count ?? 0) > Self.inlineHighlightCharLimit { return false }
         return !(item.textContent ?? "").isEmpty
+    }
+
+    /// The Format button shows only for inline, non-rich text whose content can actually be
+    /// pretty-printed (JSON or XML/HTML), so it never appears as a dead button.
+    private func formatButtonApplies(to item: ClipboardItem) -> Bool {
+        guard item.type == .text, !item.hasRichText, !item.isTruncated, !item.isFileBacked else { return false }
+        guard !isEditing else { return false }
+        let text = item.textContent ?? ""
+        guard !text.isEmpty, text.count <= Self.inlineHighlightCharLimit else { return false }
+        return CodeFormatter.canFormat(language: item.language, text: text)
+    }
+
+    /// Pretty-print the item's text in place and re-highlight the formatted result.
+    private func formatSelected(_ item: ClipboardItem) {
+        let text = item.textContent ?? ""
+        guard let formatted = CodeFormatter.format(text, language: item.language), formatted != text else { return }
+        store.updateText(formatted, for: item)
+        // Reflect the change in the live preview and re-run highlighting on the new text.
+        chunkedText.visibleText = formatted
+        chunkedText.reachedEOF = true
+        Task {
+            if let updated = store.items.first(where: { $0.id == item.id }) {
+                await loadHighlight(for: updated)
+            }
+        }
     }
 
     /// A compact menu to override the detected language for the selected item.
