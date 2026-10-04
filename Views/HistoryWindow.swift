@@ -1588,11 +1588,13 @@ struct HistoryContentView: View {
     /// re-renders when the result lands. Leaves `highlightedPreview` nil (plain fallback) for
     /// rich-formatted content, forced-plain overrides, prose, or anything over the size cap.
     private func loadHighlight(for item: ClipboardItem) async {
-        guard !item.hasRichText else { return }
         let text = item.textContent ?? ""
         guard !text.isEmpty else { return }
 
         // Resolve language: explicit override wins; "" = forced plain; otherwise detect.
+        // Note: an item may carry an HTML/RTF flavor just because it was copied from a browser
+        // (which attaches HTML to the pasteboard). That alone must NOT suppress highlighting -
+        // the detector decides based on whether the text itself looks like code vs prose.
         let language: String?
         if let override = item.language {
             if override.isEmpty { return }
@@ -1637,7 +1639,7 @@ struct HistoryContentView: View {
     /// The language picker is only meaningful for inline text items that are not rich-formatted
     /// and not shown through the large-text chunked path (which stays plain for performance).
     private func languagePickerApplies(to item: ClipboardItem) -> Bool {
-        guard item.type == .text, !item.hasRichText, !item.isTruncated else { return false }
+        guard item.type == .text, !item.isTruncated else { return false }
         if item.isFileBacked || (item.textContent?.count ?? 0) > Self.inlineHighlightCharLimit { return false }
         return !(item.textContent ?? "").isEmpty
     }
