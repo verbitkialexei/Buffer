@@ -93,21 +93,46 @@ struct HighlightedTextView: NSViewRepresentable {
     let attributedText: NSAttributedString
 
     func makeNSView(context: Context) -> NSTextView {
-        let textView = NSTextView()
+        // Build the TextKit stack explicitly. A bare NSTextView() does not lay out reliably
+        // when embedded in SwiftUI (it can collapse to zero height), so the text container and
+        // layout manager are wired up by hand with width tracking enabled.
+        let textStorage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        textStorage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(size: NSSize(width: 0, height: .greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+
+        let textView = NSTextView(frame: .zero, textContainer: container)
         textView.isEditable = false
         textView.isSelectable = true
         textView.drawsBackground = false
         textView.textContainerInset = .zero
-        textView.textContainer?.lineFragmentPadding = 0
-        // Let the enclosing SwiftUI ScrollView handle scrolling; this view sizes to content.
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
-        textView.textContainer?.widthTracksTextView = true
-        textView.setContentHuggingPriority(.defaultHigh, for: .vertical)
+        textView.autoresizingMask = [.width]
+        // Hug content vertically so SwiftUI gives it exactly the height the text needs.
+        textView.setContentHuggingPriority(.required, for: .vertical)
+        textView.setContentCompressionResistancePriority(.required, for: .vertical)
         return textView
     }
 
     func updateNSView(_ textView: NSTextView, context: Context) {
         textView.textStorage?.setAttributedString(attributedText)
+        textView.invalidateIntrinsicContentSize()
+    }
+
+    /// Report the laid-out height for the available width so the preview shows the full snippet
+    /// instead of collapsing. Width comes from the SwiftUI-proposed size.
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextView, context: Context) -> CGSize? {
+        let width = proposal.width ?? nsView.bounds.width
+        guard width > 0, let layoutManager = nsView.layoutManager, let container = nsView.textContainer else {
+            return nil
+        }
+        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        layoutManager.ensureLayout(for: container)
+        let used = layoutManager.usedRect(for: container)
+        return CGSize(width: width, height: ceil(used.height))
     }
 }
