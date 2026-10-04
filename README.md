@@ -14,6 +14,9 @@
 </a>
 <img src="https://img.shields.io/badge/macOS-13.0+-black?style=for-the-badge&logo=apple" alt="macOS 13+">
 <img src="https://img.shields.io/badge/Swift-5.9-orange?style=for-the-badge&logo=swift" alt="Swift 5.9">
+<a href="https://www.producthunt.com/products/buffer-3">
+  <img src="https://img.shields.io/badge/Product%20Hunt-Launching%20Oct%205-da552f?style=for-the-badge&logo=producthunt&logoColor=white" alt="Product Hunt">
+</a>
 <a href="https://deepwiki.com/samirpatil2000/Buffer"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 <br><br>
 <img src="https://img.shields.io/github/stars/samirpatil2000/Buffer?style=flat-square&color=orange&label=stars" alt="Stars">
