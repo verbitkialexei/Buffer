@@ -754,7 +754,7 @@ struct HistoryContentView: View {
                 if item.type == .image {
                     previewImage = await loadPreviewImage(for: item)
                 } else if item.type == .text {
-                    if item.isFileBacked || (item.textContent?.count ?? 0) > 5000 {
+                    if item.isFileBacked || (item.textContent?.count ?? 0) > Self.inlineHighlightCharLimit {
                         await loadInitialChunk(for: item)
                     } else {
                         chunkedText.visibleText = item.textContent ?? ""
@@ -1555,7 +1555,7 @@ struct HistoryContentView: View {
                     .foregroundColor(.secondary)
                     .padding(.top, 4)
             }
-        } else if item.isFileBacked || (item.textContent?.count ?? 0) > 5000 {
+        } else if item.isFileBacked || (item.textContent?.count ?? 0) > Self.inlineHighlightCharLimit {
             textContent(item)
         } else if isEditing {
             TextEditor(text: $editText)
@@ -1566,6 +1566,12 @@ struct HistoryContentView: View {
             highlightedTextBody(item)
         }
     }
+
+    /// Inline (non-file-backed) text at or below this character count is rendered directly in
+    /// the preview, where it is eligible for syntax highlighting. Above it, the lazy chunked
+    /// loader is used instead and the content stays plain. Chosen to comfortably cover real
+    /// code files while staying under the highlighter's own 100 KB byte cap.
+    static let inlineHighlightCharLimit = 20_000
 
     /// Small-text preview branch: syntax-highlighted when the content looks like code,
     /// otherwise plain monospaced. Rich-formatted items (rtfData/htmlData) are never
@@ -1597,7 +1603,7 @@ struct HistoryContentView: View {
     /// and not shown through the large-text chunked path (which stays plain for performance).
     private func languagePickerApplies(to item: ClipboardItem) -> Bool {
         guard item.type == .text, !item.hasRichText, !item.isTruncated else { return false }
-        if item.isFileBacked || (item.textContent?.count ?? 0) > 5000 { return false }
+        if item.isFileBacked || (item.textContent?.count ?? 0) > Self.inlineHighlightCharLimit { return false }
         return !(item.textContent ?? "").isEmpty
     }
 
