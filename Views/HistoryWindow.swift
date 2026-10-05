@@ -1661,11 +1661,40 @@ struct HistoryContentView: View {
             HighlightedTextView(attributedText: attributed)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         } else {
-            Text(text)
-                .font(.system(size: previewFontSize, design: .monospaced))
+            Text(highlightedSearchText(text, size: previewFontSize, monospaced: true))
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         }
+    }
+
+    /// The active plain-text search query (empty for no search or a #tag filter), used to
+    /// highlight matches in the preview.
+    private var activeSearchQuery: String {
+        let q = debouncedSearchText.trimmingCharacters(in: .whitespaces)
+        return q.hasPrefix("#") ? "" : q
+    }
+
+    /// Render `text` as an AttributedString with every case-insensitive occurrence of the active
+    /// search query highlighted. Returns plain styling when there is no query or no match.
+    private func highlightedSearchText(_ text: String, size: CGFloat, monospaced: Bool) -> AttributedString {
+        var attributed = AttributedString(text)
+        attributed.font = monospaced
+            ? .system(size: size, design: .monospaced)
+            : .system(size: size)
+
+        let query = activeSearchQuery
+        guard query.count >= 1 else { return attributed }
+
+        // Walk case-insensitive matches in the source string and map each to the AttributedString.
+        var searchStart = text.startIndex
+        while let range = text.range(of: query, options: .caseInsensitive, range: searchStart..<text.endIndex) {
+            if let attrRange = Range(range, in: attributed) {
+                attributed[attrRange].backgroundColor = .yellow.opacity(0.5)
+                attributed[attrRange].foregroundColor = .black
+            }
+            searchStart = range.upperBound
+        }
+        return attributed
     }
 
     /// The language picker is only meaningful for inline text items that are not rich-formatted
@@ -1774,8 +1803,7 @@ struct HistoryContentView: View {
                     .padding(.top, 10)
 
                 HStack(alignment: .top) {
-                    Text(ocrText)
-                        .font(.system(size: previewFontSize))
+                    Text(highlightedSearchText(ocrText, size: previewFontSize, monospaced: false))
                         .textSelection(.enabled)
                         .lineSpacing(4)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
