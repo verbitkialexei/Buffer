@@ -96,11 +96,11 @@ enum RichContentRenderer {
     static func attributedString(for item: ClipboardItem) -> NSAttributedString? {
         if let rtfd = item.rtfdData,
            let s = NSAttributedString(rtfd: rtfd, documentAttributes: nil) {
-            return s
+            return normalizedForDarkablePane(s)
         }
         if let rtf = item.rtfData,
            let s = NSAttributedString(rtf: rtf, documentAttributes: nil) {
-            return s
+            return normalizedForDarkablePane(s)
         }
         if let html = item.htmlData, !htmlReferencesRemoteImages(html) {
             let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
@@ -108,10 +108,28 @@ enum RichContentRenderer {
                 .characterEncoding: String.Encoding.utf8.rawValue
             ]
             if let s = try? NSAttributedString(data: html, options: options, documentAttributes: nil) {
-                return s
+                return normalizedForDarkablePane(s)
             }
         }
         return nil
+    }
+
+    /// Strip source-document colors so the content sits cleanly on Buffer's own pane:
+    /// - Remove background colors (otherwise copied-from-web text shows its page background,
+    ///   which reads as a highlight on the preview's dark pane).
+    /// - Replace explicit foreground colors with the control's label color so text stays readable
+    ///   in both light and dark appearance. Images (text attachments) are left untouched.
+    private static func normalizedForDarkablePane(_ input: NSAttributedString) -> NSAttributedString {
+        let output = NSMutableAttributedString(attributedString: input)
+        let full = NSRange(location: 0, length: output.length)
+        output.removeAttribute(.backgroundColor, range: full)
+        output.enumerateAttribute(.foregroundColor, in: full) { value, range, _ in
+            // Only recolor runs that actually carry a foreground color; leave attachment runs alone.
+            if value != nil {
+                output.addAttribute(.foregroundColor, value: NSColor.labelColor, range: range)
+            }
+        }
+        return output
     }
 
     /// True if the HTML contains an <img> whose src is a remote http(s) URL (would trigger a
