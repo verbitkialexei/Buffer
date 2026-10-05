@@ -1548,7 +1548,7 @@ struct HistoryContentView: View {
                 if item.isCombined, let rich = richContentPreview {
                     // Render the stored rich payload so images appear inline in their original
                     // position, with formatting. This is the faithful representation.
-                    HighlightedTextView(attributedText: rich)
+                    HighlightedTextView(attributedText: rich, searchQuery: activeSearchQuery)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                 } else {
                     // Fallback: plain text, then any images stacked below.
@@ -1658,7 +1658,7 @@ struct HistoryContentView: View {
     private func highlightedTextBody(_ item: ClipboardItem) -> some View {
         let text = item.textContent ?? ""
         if let attributed = highlightedPreview {
-            HighlightedTextView(attributedText: attributed)
+            HighlightedTextView(attributedText: attributed, searchQuery: activeSearchQuery)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         } else {
             Text(highlightedSearchText(text, size: previewFontSize, monospaced: true))

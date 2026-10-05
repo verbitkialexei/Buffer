@@ -162,6 +162,8 @@ enum RichContentRenderer {
 /// `.textSelection(.enabled)` behavior of the plain-text branch it replaces.
 struct HighlightedTextView: NSViewRepresentable {
     let attributedText: NSAttributedString
+    /// Active search query to highlight within the rendered text (empty = none).
+    var searchQuery: String = ""
 
     func makeNSView(context: Context) -> NSTextView {
         // Build the TextKit stack explicitly. A bare NSTextView() does not lay out reliably
@@ -190,11 +192,28 @@ struct HighlightedTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ textView: NSTextView, context: Context) {
-        textView.textStorage?.setAttributedString(attributedText)
+        let display = NSMutableAttributedString(attributedString: attributedText)
+        applySearchHighlight(on: display)
+        textView.textStorage?.setAttributedString(display)
         // Collapse any selection so the content is not shown with a highlighted background.
         // Setting the text can leave the whole string selected, which reads as "selected text".
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.invalidateIntrinsicContentSize()
+    }
+
+    /// Overlay a yellow background on every case-insensitive occurrence of the search query, so
+    /// matches are visible even in syntax-highlighted or rich (image-bearing) content.
+    private func applySearchHighlight(on text: NSMutableAttributedString) {
+        let query = searchQuery.trimmingCharacters(in: .whitespaces)
+        guard query.count >= 1 else { return }
+        let haystack = text.string
+        var searchRange = haystack.startIndex..<haystack.endIndex
+        while let found = haystack.range(of: query, options: .caseInsensitive, range: searchRange) {
+            let nsRange = NSRange(found, in: haystack)
+            text.addAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.5), range: nsRange)
+            text.addAttribute(.foregroundColor, value: NSColor.black, range: nsRange)
+            searchRange = found.upperBound..<haystack.endIndex
+        }
     }
 
     /// Report the laid-out height for the available width so the preview shows the full snippet
