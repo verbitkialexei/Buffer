@@ -84,6 +84,59 @@ final class HighlighterSwiftEngine: SyntaxHighlighting, @unchecked Sendable {
 
 import SwiftUI
 
+/// Builds an attributed string from a clipboard item's stored rich payload (RTFD, then RTF, then
+/// HTML), so a combined text+image item renders with its images inline in their original position
+/// and with its formatting - using the exact data that was captured, no reconstruction.
+///
+/// Network safety: NSAttributedString(html:) will fetch remote <img src="http..."> URLs while
+/// parsing. To keep the preview offline, HTML is only used when it contains no remote image
+/// references (inline base64 data: images are fine). RTFD/RTF embed their images and never fetch.
+enum RichContentRenderer {
+
+    static func attributedString(for item: ClipboardItem) -> NSAttributedString? {
+        if let rtfd = item.rtfdData,
+           let s = NSAttributedString(rtfd: rtfd, documentAttributes: nil) {
+            return s
+        }
+        if let rtf = item.rtfData,
+           let s = NSAttributedString(rtf: rtf, documentAttributes: nil) {
+            return s
+        }
+        if let html = item.htmlData, !htmlReferencesRemoteImages(html) {
+            let options: [NSAttributedString.DocumentReadingOptionKey: Any] = [
+                .documentType: NSAttributedString.DocumentType.html,
+                .characterEncoding: String.Encoding.utf8.rawValue
+            ]
+            if let s = try? NSAttributedString(data: html, options: options, documentAttributes: nil) {
+                return s
+            }
+        }
+        return nil
+    }
+
+    /// True if the HTML contains an <img> whose src is a remote http(s) URL (would trigger a
+    /// network fetch during parsing). Inline data: images and no images are both safe.
+    private static func htmlReferencesRemoteImages(_ html: Data) -> Bool {
+        let text = String(decoding: html, as: UTF8.self)
+        guard let regex = try? NSRegularExpression(
+            pattern: "<img\\b[^>]*?\\bsrc\\s*=\\s*[\"']([^\"']+)[\"']",
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else { return false }
+        let range = NSRange(text.startIndex..., in: text)
+        var remote = false
+        regex.enumerateMatches(in: text, range: range) { match, _, stop in
+            guard let match = match, match.numberOfRanges >= 2,
+                  let r = Range(match.range(at: 1), in: text) else { return }
+            let src = String(text[r])
+            if src.hasPrefix("http://") || src.hasPrefix("https://") {
+                remote = true
+                stop.pointee = true
+            }
+        }
+        return remote
+    }
+}
+
 /// Read-only, selectable NSTextView host for a highlighted NSAttributedString.
 ///
 /// SwiftUI `Text` cannot render an arbitrary NSAttributedString with per-token colors, so a

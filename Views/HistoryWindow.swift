@@ -249,6 +249,7 @@ struct HistoryContentView: View {
     @State private var previewImage: NSImage?
     @State private var attachedPreviewImages: [NSImage] = []
     @State private var highlightedPreview: NSAttributedString?
+    @State private var richContentPreview: NSAttributedString?
     @State private var chunkedText = ChunkedTextState()
     @State private var scrollTrigger = false  // Triggers scroll on keyboard navigation
     @State private var itemSize: Int?         // Holds computed size of item
@@ -742,6 +743,7 @@ struct HistoryContentView: View {
             previewImage = nil
             attachedPreviewImages = []
             highlightedPreview = nil
+            richContentPreview = nil
             chunkedText = ChunkedTextState()
             isExtractingText = false
             itemSize = nil
@@ -762,7 +764,20 @@ struct HistoryContentView: View {
                         chunkedText.reachedEOF = true
                         await loadHighlight(for: item)
                     }
-                    if item.isCombined { attachedPreviewImages = await loadImages(item.imageFilenames) }
+                    if item.isCombined {
+                        // Prefer faithful inline rendering from the stored rich payload; fall back
+                        // to stacked images below the text if it can't be reconstructed.
+                        let rich = await Task.detached(priority: .userInitiated) {
+                            RichContentRenderer.attributedString(for: item)
+                        }.value
+                        if selectedItem?.id == item.id {
+                            if let rich = rich {
+                                richContentPreview = rich
+                            } else {
+                                attachedPreviewImages = await loadImages(item.imageFilenames)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1530,10 +1545,18 @@ struct HistoryContentView: View {
         switch item.type {
         case .text:
             VStack(alignment: .leading, spacing: 12) {
-                textBody(item)
-                if item.isCombined {
-                    ForEach(Array(attachedPreviewImages.enumerated()), id: \.offset) { _, image in
-                        ZoomableImageView(image: image)
+                if item.isCombined, let rich = richContentPreview {
+                    // Render the stored rich payload so images appear inline in their original
+                    // position, with formatting. This is the faithful representation.
+                    HighlightedTextView(attributedText: rich)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                } else {
+                    // Fallback: plain text, then any images stacked below.
+                    textBody(item)
+                    if item.isCombined {
+                        ForEach(Array(attachedPreviewImages.enumerated()), id: \.offset) { _, image in
+                            ZoomableImageView(image: image)
+                        }
                     }
                 }
                 ocrSection(item)
