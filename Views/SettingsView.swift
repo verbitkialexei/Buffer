@@ -237,7 +237,26 @@ struct SettingsView: View {
                         .toggleStyle(.switch)
                 }
                 .help("Stores styled text (RTF/HTML) and images embedded in copied text alongside the plain text. Increases history file size.")
-                
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Download remote images from copied web content")
+                            .font(.system(size: 13, weight: .medium))
+                        Spacer()
+                        Toggle("", isOn: $settings.downloadRemoteImages)
+                            .labelsHidden()
+                            .onChange(of: settings.downloadRemoteImages) { _ in
+                                settings.save()
+                            }
+                            .toggleStyle(.switch)
+                            .disabled(!settings.preserveRichText)
+                    }
+                    Text("⚠️ Makes network requests when you copy. Images in web pages are usually remote links, so capturing them means fetching from the web - which can load tracking pixels and leak that you copied the content. Off by default. Not needed for native apps like Pages or Mail.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 // History Size Section
                 Divider()
                     .padding(.vertical, 4)
@@ -445,6 +464,7 @@ class SettingsViewModel: ObservableObject {
     @Published var customHistoryLimit: Int
     @Published var autoOCR: Bool
     @Published var preserveRichText: Bool
+    @Published var downloadRemoteImages: Bool
     
     private let defaults = UserDefaults.standard
     private let hotkeyModifiersKey = "hotkeyModifiers"
@@ -480,6 +500,7 @@ class SettingsViewModel: ObservableObject {
         self.customHistoryLimit = SettingsManager.shared.customHistoryLimit
         self.autoOCR = SettingsManager.shared.autoOCR
         self.preserveRichText = SettingsManager.shared.preserveRichText
+        self.downloadRemoteImages = SettingsManager.shared.downloadRemoteImages
     }
     
     func save() {
@@ -500,6 +521,7 @@ class SettingsViewModel: ObservableObject {
         SettingsManager.shared.customHistoryLimit = customHistoryLimit
         SettingsManager.shared.autoOCR = autoOCR
         SettingsManager.shared.preserveRichText = preserveRichText
+        SettingsManager.shared.downloadRemoteImages = downloadRemoteImages
         SettingsManager.shared.save()
 
         NotificationCenter.default.post(name: .bufferHotkeyChanged, object: nil)

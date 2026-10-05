@@ -623,4 +623,26 @@ class ClipboardItemTests: XCTestCase {
         XCTAssertFalse(CodeFormatter.canFormat(language: "swift", text: "let x = 1"))
         XCTAssertFalse(CodeFormatter.canFormat(language: nil, text: "just some prose here"))
     }
+
+    // MARK: - Remote image URL extraction (opt-in download feature)
+
+    func testRemoteImageURLExtraction() {
+        let html = """
+        <div>
+          <img src="https://example.com/a.png" alt="a">
+          <img src='http://example.com/b.jpg'>
+          <img src="/relative/c.png">
+          <img src="data:image/png;base64,AAAA">
+          <img src="https://example.com/a.png">
+        </div>
+        """
+        let urls = ClipboardWatcher.remoteImageURLs(fromHTML: html)
+        let strings = urls.map { $0.absoluteString }
+        // Absolute http(s) only, de-duplicated, relative and data: skipped.
+        XCTAssertEqual(strings, ["https://example.com/a.png", "http://example.com/b.jpg"])
+    }
+
+    func testRemoteImageURLExtractionEmptyWhenNoImages() {
+        XCTAssertTrue(ClipboardWatcher.remoteImageURLs(fromHTML: "<p>no images here</p>").isEmpty)
+    }
 }

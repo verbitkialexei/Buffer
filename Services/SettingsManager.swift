@@ -70,6 +70,7 @@ class SettingsManager: ObservableObject {
     private let customHistoryLimitKey = "customHistoryLimit"
     private let autoOCRKey = "autoOCR"
     private let preserveRichTextKey = "preserveRichText"
+    private let downloadRemoteImagesKey = "downloadRemoteImages"
 
     static let zoomLevels: [Double] = [0.8, 0.9, 1.0, 1.15, 1.3, 1.5]
     static let defaultZoomScale: Double = 1.0
@@ -89,6 +90,9 @@ class SettingsManager: ObservableObject {
     @Published var customHistoryLimit: Int = 20_000
     @Published var autoOCR: Bool = true
     @Published var preserveRichText: Bool = true
+    // Opt-in: download remote images referenced in copied HTML so browser text+image
+    // selections capture their pictures. Default OFF - it makes network requests on copy.
+    @Published var downloadRemoteImages: Bool = false
     
     private init() {
         // Initialize with defaults first, then load saved values
@@ -158,6 +162,7 @@ class SettingsManager: ObservableObject {
         // so use defaults.object(forKey:) as? Bool, NOT defaults.bool(forKey:) which silently
         // returns false for a missing key)
         self.preserveRichText = defaults.object(forKey: preserveRichTextKey) as? Bool ?? true
+        self.downloadRemoteImages = defaults.object(forKey: downloadRemoteImagesKey) as? Bool ?? false
     }
     
     func save() {
@@ -173,6 +178,7 @@ class SettingsManager: ObservableObject {
         HistoryLimit.customHistoryLimit = customHistoryLimit
         defaults.set(autoOCR, forKey: autoOCRKey)
         defaults.set(preserveRichText, forKey: preserveRichTextKey)
+        defaults.set(downloadRemoteImages, forKey: downloadRemoteImagesKey)
     }
 
     func zoomIn() {

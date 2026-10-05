@@ -26,6 +26,11 @@ class ClipboardWatcher: ObservableObject {
     private let maxAttributedParseBytes = 10_000_000 // refuse to materialise a document larger than this
     private let maxAttachmentBytes = 5_000_000       // per attachment, measured on the PNG we would write
 
+    // Opt-in remote-image download budgets (only used when downloadRemoteImages is enabled).
+    private let maxRemoteImageDownloads = 8          // cap how many URLs we fetch per copy
+    private let remoteImageTimeout: TimeInterval = 5 // per-request timeout; copy must not hang
+    private let maxRemoteImageBytes = 5_000_000      // reject responses larger than this
+
     static func shouldCaptureText(_ text: String, minimumLength: Int) -> Bool {
         !text.isEmpty && text.count >= minimumLength
     }
@@ -123,7 +128,11 @@ class ClipboardWatcher: ObservableObject {
             let rtfdFlavour = SettingsManager.shared.preserveRichText ? pasteboard.data(forType: .rtfd) : nil
             let rtfFlavour = SettingsManager.shared.preserveRichText ? pasteboard.data(forType: .rtf) : nil
 
-            if rtfdFlavour == nil && rtfFlavour == nil {
+            // The async attachment path runs when there is a styled flavour to parse for embedded
+            // images, OR when remote-image download is enabled and HTML is present (browser copies
+            // have HTML but no .rtf/.rtfd, so they would otherwise take the fast path).
+            let mayDownloadRemote = SettingsManager.shared.downloadRemoteImages && rich.html != nil
+            if rtfdFlavour == nil && rtfFlavour == nil && !mayDownloadRemote {
                 // Fast path, identical to 3a: no attachments possible.
                 let hash = hashSource.hashValue
                 if hash != lastContentHash {
@@ -139,7 +148,17 @@ class ClipboardWatcher: ObservableObject {
                 guard let self = self else { return }
 
                 // 1. Parse. No disk, no network. Bounded by maxAttributedParseBytes.
-                let attachments = self.extractAttachments(rtfd: rtfdFlavour, rtf: rtfFlavour)
+                var attachments = self.extractAttachments(rtfd: rtfdFlavour, rtf: rtfFlavour)
+
+                // 1b. Opt-in only: if no images were embedded locally (typical for browser
+                //     copies, which reference images by remote URL in HTML), and the user has
+                //     enabled remote download, fetch them over the network. Off by default.
+                if attachments.isEmpty,
+                   SettingsManager.shared.downloadRemoteImages,
+                   let htmlData = rich.html {
+                    let htmlString = String(decoding: htmlData, as: UTF8.self)
+                    attachments = self.downloadRemoteImages(fromHTML: htmlString)
+                }
 
                 // 2. Hash BEFORE any disk write, mixing attachment bytes so that the same caption
                 //    copied twice with different pictures is not swallowed as a duplicate.
@@ -261,6 +280,73 @@ class ClipboardWatcher: ObservableObject {
         }
         if out.count >= maxEmbeddedImages {
             print("[Buffer] Capping embedded images at \(maxEmbeddedImages)")
+        }
+        return out
+    }
+
+    /// Extract absolute http(s) image URLs from copied HTML. Pure string parsing, no network.
+    /// Exposed for unit testing. Relative URLs and data: URIs are ignored (data: images are
+    /// already handled by the attributed-string attachment path).
+    static func remoteImageURLs(fromHTML html: String) -> [URL] {
+        // Match src="..." or src='...' inside <img ...> tags.
+        guard let regex = try? NSRegularExpression(
+            pattern: "<img\\b[^>]*?\\bsrc\\s*=\\s*[\"']([^\"']+)[\"']",
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else { return [] }
+
+        let range = NSRange(html.startIndex..., in: html)
+        var urls: [URL] = []
+        var seen = Set<String>()
+        regex.enumerateMatches(in: html, range: range) { match, _, _ in
+            guard let match = match, match.numberOfRanges >= 2,
+                  let r = Range(match.range(at: 1), in: html) else { return }
+            let src = String(html[r])
+            // Only absolute http(s) URLs - skip data:, relative, and other schemes.
+            guard src.hasPrefix("http://") || src.hasPrefix("https://") else { return }
+            guard !seen.contains(src), let url = URL(string: src) else { return }
+            seen.insert(src)
+            urls.append(url)
+        }
+        return urls
+    }
+
+    /// Download the remote images referenced in `html`, bounded by count, per-request timeout, and
+    /// response size. Returns PNG-encoded data for each image that downloads and decodes cleanly.
+    /// Runs synchronously on the calling background queue; never called on the main thread.
+    private func downloadRemoteImages(fromHTML html: String) -> [Data] {
+        let urls = Array(Self.remoteImageURLs(fromHTML: html).prefix(maxRemoteImageDownloads))
+        guard !urls.isEmpty else { return [] }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = remoteImageTimeout
+        config.httpCookieStorage = nil          // do not send stored cookies
+        config.httpShouldSetCookies = false
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+
+        var out: [Data] = []
+        for url in urls {
+            let semaphore = DispatchSemaphore(value: 0)
+            var pngResult: Data?
+            let task = session.dataTask(with: url) { [weak self] data, response, _ in
+                defer { semaphore.signal() }
+                guard let self = self, let data = data else { return }
+                guard data.count <= self.maxRemoteImageBytes else { return }
+                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) { return }
+                guard let image = NSImage(data: data),
+                      image.size.width >= self.minEmbeddedImageEdge,
+                      image.size.height >= self.minEmbeddedImageEdge,
+                      let png = Self.pngData(from: data),
+                      png.count <= self.maxAttachmentBytes else { return }
+                pngResult = png
+            }
+            task.resume()
+            // Bound the wait so a slow server cannot stall capture beyond the timeout.
+            _ = semaphore.wait(timeout: .now() + remoteImageTimeout + 1)
+            if let png = pngResult { out.append(png) }
+        }
+        if !out.isEmpty {
+            print("[Buffer] Downloaded \(out.count) remote image(s) from copied HTML")
         }
         return out
     }
