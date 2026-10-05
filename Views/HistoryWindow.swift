@@ -1770,7 +1770,7 @@ struct HistoryContentView: View {
                 // separate metadata, not part of the item's own content.
                 if item.isCombined {
                     Text("Text extracted from image")
-                        .font(.system(size: 10, weight: .medium).smallCaps())
+                        .font(.system(size: 20, weight: .medium).smallCaps())
                         .foregroundColor(.secondary.opacity(0.7))
                         .padding(.top, 10)
                 }
