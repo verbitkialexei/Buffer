@@ -8,6 +8,25 @@
   <strong>A lightweight, beautiful clipboard manager for macOS</strong>
 </p>
 
+---
+
+> ### ⚡ This is a customized fork (`3.0.5 - Custom`)
+>
+> This branch adds several enhancements on top of upstream Buffer. See
+> **[CHANGES.md](CHANGES.md)** for the full write-up. Summary:
+>
+> - **Configurable history size** — a Custom tier with any numeric cap, plus truly-unlimited
+> - **Automatic, searchable OCR** — images are OCR'd on capture and findable by the text inside them
+> - **Rich text + combined text/image items** — formatting preserved; images render inline in position
+> - **Code syntax highlighting** — ~190 languages (HighlighterSwift) with auto-detection and a manual override
+> - **In-place JSON / XML formatter** — a Format button that pretty-prints in place
+> - **Browser image capture** — inline base64 images automatically; remote images via an opt-in, off-by-default setting
+> - **Search highlighting** — the search term is highlighted across text, OCR, rich, and code previews
+>
+> Build it with Xcode (⌘R). Note: builds here are ad-hoc signed, not notarized.
+
+---
+
 <p align="center">
 <a href="https://github.com/samirpatil2000/Buffer/releases/latest">
   <img src="https://img.shields.io/badge/Download-v2.6.0-blue?style=for-the-badge&logo=apple" alt="Download">
