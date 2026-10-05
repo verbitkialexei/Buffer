@@ -173,6 +173,9 @@ struct HighlightedTextView: NSViewRepresentable {
 
     func updateNSView(_ textView: NSTextView, context: Context) {
         textView.textStorage?.setAttributedString(attributedText)
+        // Collapse any selection so the content is not shown with a highlighted background.
+        // Setting the text can leave the whole string selected, which reads as "selected text".
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.invalidateIntrinsicContentSize()
     }
 
