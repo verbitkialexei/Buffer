@@ -131,29 +131,45 @@ class ClipboardStore: ObservableObject {
         triggerAutoOCRIfNeeded(for: item)
     }
 
-    /// Automatically run OCR on a freshly added image item, if auto-OCR is enabled and the
-    /// item hasn't been OCR'd yet. Covers both capture paths (pasteboard image and Finder
-    /// single-image-file) since both funnel through add(_:) -> performAdd.
+    /// Automatically run OCR on a freshly added item's image(s), if auto-OCR is enabled and the
+    /// item hasn't been OCR'd yet. Covers pure image items (both capture paths) AND combined
+    /// text+image items, which carry their pictures in `imageFilenames`. For a combined item the
+    /// OCR text is stored separately in `ocrText` for search/retrieval - it is never merged into
+    /// the item's own text and never affects what gets pasted.
     private func triggerAutoOCRIfNeeded(for item: ClipboardItem) {
-        guard item.type == .image,
-              SettingsManager.shared.autoOCR,
+        guard SettingsManager.shared.autoOCR,
               item.ocrText == nil,
               !ocrInProgress.contains(item.id) else { return }
+
+        // Collect every image this item owns (pure image's single file, or a combined item's
+        // attachment list). Nothing to OCR if there are no images.
+        let filenames = item.allImageFilenames
+        guard !filenames.isEmpty else { return }
 
         ocrInProgress.insert(item.id)
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self, let image = self.image(for: item) else {
-                self?.runOnMain { self?.ocrInProgress.remove(item.id) }
+            guard let self = self else { return }
+            let images = filenames.compactMap { self.attachedImage(filename: $0) }
+            guard !images.isEmpty else {
+                self.runOnMain { self.ocrInProgress.remove(item.id) }
                 return
             }
 
             Task {
-                let result = await OCRService.shared.recognizeText(from: image)
+                // OCR each image; join non-empty results with blank lines so multiple pictures
+                // remain individually searchable.
+                var pieces: [String] = []
+                for image in images {
+                    if let recognized = await OCRService.shared.recognizeText(from: image),
+                       !recognized.isEmpty {
+                        pieces.append(recognized)
+                    }
+                }
                 // Empty string is the auto-OCR no-text sentinel, deliberately distinct from
                 // the manual button's human-facing "No text found in this image." string,
                 // because that string is itself text that could spuriously match a search.
-                let text = result ?? ""
+                let text = pieces.joined(separator: "\n\n")
                 self.runOnMain {
                     self.setOCRText(text, for: item)
                     self.ocrInProgress.remove(item.id)

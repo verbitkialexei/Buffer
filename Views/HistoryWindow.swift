@@ -1760,12 +1760,21 @@ struct HistoryContentView: View {
             ProgressView()
                 .controlSize(.small)
                 .padding(.vertical, 12)
-        } else if let ocrText = item.ocrText {
+        } else if let ocrText = item.ocrText, !ocrText.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 Rectangle()
                     .fill(Color.primary.opacity(0.15))
                     .frame(height: 0.5)
-                
+
+                // For combined text+image items, label the block so the extracted text reads as
+                // separate metadata, not part of the item's own content.
+                if item.isCombined {
+                    Text("Text extracted from image")
+                        .font(.system(size: 10, weight: .medium).smallCaps())
+                        .foregroundColor(.secondary.opacity(0.7))
+                        .padding(.top, 10)
+                }
+
                 HStack(alignment: .top) {
                     Text(ocrText)
                         .font(.system(size: previewFontSize))
@@ -1785,7 +1794,7 @@ struct HistoryContentView: View {
                     .buttonStyle(.plain)
                     .help("Copy extracted text")
                 }
-                .padding(.top, 12)
+                .padding(.top, item.isCombined ? 6 : 12)
             }
         }
     }
