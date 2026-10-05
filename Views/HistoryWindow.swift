@@ -1766,14 +1766,12 @@ struct HistoryContentView: View {
                     .fill(Color.primary.opacity(0.15))
                     .frame(height: 0.5)
 
-                // For combined text+image items, label the block so the extracted text reads as
-                // separate metadata, not part of the item's own content.
-                if item.isCombined {
-                    Text("Text extracted from image")
-                        .font(.system(size: 20, weight: .medium).smallCaps())
-                        .foregroundColor(.secondary.opacity(0.7))
-                        .padding(.top, 10)
-                }
+                // Label the extracted-text block for both pure image items and combined
+                // text+image items, so it reads as separate metadata rather than content.
+                Text("Text extracted from image")
+                    .font(.system(size: 20, weight: .medium).smallCaps())
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .padding(.top, 10)
 
                 HStack(alignment: .top) {
                     Text(ocrText)
@@ -1794,7 +1792,7 @@ struct HistoryContentView: View {
                     .buttonStyle(.plain)
                     .help("Copy extracted text")
                 }
-                .padding(.top, item.isCombined ? 6 : 12)
+                .padding(.top, 6)
             }
         }
     }
