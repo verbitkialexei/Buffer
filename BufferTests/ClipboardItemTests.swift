@@ -645,4 +645,10 @@ class ClipboardItemTests: XCTestCase {
     func testRemoteImageURLExtractionEmptyWhenNoImages() {
         XCTAssertTrue(ClipboardWatcher.remoteImageURLs(fromHTML: "<p>no images here</p>").isEmpty)
     }
+
+    func testRemoteImageURLExtractionIgnoresDataURIs() {
+        // data: images are handled by the inline-data path, not the remote-download path.
+        let html = "<img src=\"data:image/png;base64,iVBORw0KGgo=\">"
+        XCTAssertTrue(ClipboardWatcher.remoteImageURLs(fromHTML: html).isEmpty)
+    }
 }

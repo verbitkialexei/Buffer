@@ -129,10 +129,11 @@ class ClipboardWatcher: ObservableObject {
             let rtfFlavour = SettingsManager.shared.preserveRichText ? pasteboard.data(forType: .rtf) : nil
 
             // The async attachment path runs when there is a styled flavour to parse for embedded
-            // images, OR when remote-image download is enabled and HTML is present (browser copies
-            // have HTML but no .rtf/.rtfd, so they would otherwise take the fast path).
-            let mayDownloadRemote = SettingsManager.shared.downloadRemoteImages && rich.html != nil
-            if rtfdFlavour == nil && rtfFlavour == nil && !mayDownloadRemote {
+            // images, OR when HTML is present and could yield images: inline base64 data: images
+            // (always) or remote http(s) images (only if the user opted in). Browser copies have
+            // HTML but no .rtf/.rtfd, so they would otherwise take the fast path and miss images.
+            let htmlMayHaveImages = rich.html != nil
+            if rtfdFlavour == nil && rtfFlavour == nil && !htmlMayHaveImages {
                 // Fast path, identical to 3a: no attachments possible.
                 let hash = hashSource.hashValue
                 if hash != lastContentHash {
@@ -150,14 +151,18 @@ class ClipboardWatcher: ObservableObject {
                 // 1. Parse. No disk, no network. Bounded by maxAttributedParseBytes.
                 var attachments = self.extractAttachments(rtfd: rtfdFlavour, rtf: rtfFlavour)
 
-                // 1b. Opt-in only: if no images were embedded locally (typical for browser
-                //     copies, which reference images by remote URL in HTML), and the user has
-                //     enabled remote download, fetch them over the network. Off by default.
-                if attachments.isEmpty,
-                   SettingsManager.shared.downloadRemoteImages,
-                   let htmlData = rich.html {
+                // 1b. If no images were embedded via the attributed (.rtf/.rtfd) path, look at the
+                //     HTML flavour. Browser copies carry images either as inline data: URIs
+                //     (base64, already local - always extracted) or as remote http(s) URLs
+                //     (fetched only when the user opted in to remote download).
+                if attachments.isEmpty, let htmlData = rich.html {
                     let htmlString = String(decoding: htmlData, as: UTF8.self)
-                    attachments = self.downloadRemoteImages(fromHTML: htmlString)
+                    // Inline base64 images - no network, always safe to decode.
+                    attachments = self.inlineDataImages(fromHTML: htmlString)
+                    // Remote images - opt-in only, makes network requests.
+                    if attachments.isEmpty, SettingsManager.shared.downloadRemoteImages {
+                        attachments = self.downloadRemoteImages(fromHTML: htmlString)
+                    }
                 }
 
                 // 2. Hash BEFORE any disk write, mixing attachment bytes so that the same caption
@@ -280,6 +285,37 @@ class ClipboardWatcher: ObservableObject {
         }
         if out.count >= maxEmbeddedImages {
             print("[Buffer] Capping embedded images at \(maxEmbeddedImages)")
+        }
+        return out
+    }
+
+    /// Decode inline base64 `data:image/...` URIs embedded in copied HTML into PNG data.
+    /// No network - the bytes are already present in the HTML. Bounded by the same count and
+    /// per-image size limits as other attachment paths.
+    private func inlineDataImages(fromHTML html: String) -> [Data] {
+        guard let regex = try? NSRegularExpression(
+            pattern: "data:image/[a-zA-Z0-9.+-]+;base64,([A-Za-z0-9+/=]+)",
+            options: [.caseInsensitive]
+        ) else { return [] }
+
+        let range = NSRange(html.startIndex..., in: html)
+        var out: [Data] = []
+        var seen = Set<String>()
+        regex.enumerateMatches(in: html, range: range) { match, _, stop in
+            guard out.count < maxEmbeddedImages else { stop.pointee = true; return }
+            guard let match = match, match.numberOfRanges >= 2,
+                  let r = Range(match.range(at: 1), in: html) else { return }
+            let b64 = String(html[r])
+            guard !seen.contains(b64), let raw = Data(base64Encoded: b64) else { return }
+            seen.insert(b64)
+            guard raw.count <= maxAttachmentBytes,
+                  let image = NSImage(data: raw),
+                  image.size.width >= minEmbeddedImageEdge, image.size.height >= minEmbeddedImageEdge,
+                  let png = Self.pngData(from: raw) else { return }
+            out.append(png)
+        }
+        if !out.isEmpty {
+            print("[Buffer] Extracted \(out.count) inline data: image(s) from copied HTML")
         }
         return out
     }
